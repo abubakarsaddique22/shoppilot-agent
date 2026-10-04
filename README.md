@@ -11,6 +11,7 @@ Poora plan: `ShopPilot_Agentic_AI_Blueprint_A_to_Z.pdf`. Requirements aur target
 - Python 3.12 (uv khud manage karta hai, `.python-version` dekho)
 - [uv](https://docs.astral.sh/uv/) (Windows: `winget install astral-sh.uv`)
 - Docker Desktop (Postgres + pgvector ke liye)
+- Windows par: naya Microsoft Visual C++ Redistributable x64 (https://aka.ms/vs/17/release/vc_redist.x64.exe). Purana version ho to fastembed (`onnxruntime`) import karte hi bina error ke crash ho jata hai.
 
 ## Quick start (Windows cmd)
 
@@ -26,7 +27,7 @@ uv run uvicorn shoppilot.api.main:app --reload
 
 `.env` mein apni `SHOP_LLM_API_KEY` aur `LANGSMITH_API_KEY` daalo. API docs: http://127.0.0.1:8000/docs
 
-## Ab tak ka status (Steps A se H)
+## Ab tak ka status (Steps A se I)
 
 | Step | Kaam | Status |
 |---|---|---|
@@ -36,10 +37,11 @@ uv run uvicorn shoppilot.api.main:app --reload
 | D | Config, secrets, logging | Done |
 | E | Store backend + 200 fake orders (MockShop) | Done (Shopify baad mein) |
 | F | Policy engine (refund rules) | Done |
-| G | Policy knowledge base (RAG) | Done (code likha, tests chalane baqi) |
+| G | Policy knowledge base (RAG, fastembed) | Done (22 tests pass, threshold data se chuna) |
 | H | Database tables + migrations | Done |
+| I | Tools (agent ke haath) | Code likha, tests baqi |
 
-Baqi steps (I se Z): tools, agents, approval, API, UI, evaluation, AWS deploy. Dekho blueprint.
+Baqi steps (J se Z): agents, approval, API, UI, evaluation, AWS deploy. Dekho blueprint.
 
 ---
 
@@ -141,14 +143,18 @@ Hard rules jo koi approval nahi tod sakti: refund kabhi (paid minus pehle ke ref
 
 **Kya hai:**
 - `kb/ingest.py`: `configs/policies/*.md` ko section ke hisaab se chunks mein todta hai. Har chunk ke shuru mein heading path hota hai (jaise `Returns > Damaged items`). Dobara chalane par purani rows replace hoti hain.
-- `kb/embeddings.py`: sentence-transformers (Hugging Face model, apni machine par CPU par chalta hai, API key nahi chahiye). Model pehli baar download hota hai `.cache/huggingface` mein. Default model `paraphrase-multilingual-MiniLM-L12-v2` hai (384 numbers), badalna ho to `SHOP_EMBEDDING_MODEL`.
+- `kb/embeddings.py`: fastembed (ONNX, CPU par chalta hai, API key nahi chahiye, torch nahi chahiye). Model pehli baar download hota hai `.cache/fastembed` mein (taqreeban 67 MB). Default model `BAAI/bge-small-en-v1.5` hai (384 numbers, `db/models.py` ke `EMBEDDING_DIM` se match karna zaroori). Badalna ho to `SHOP_EMBEDDING_MODEL` aur phir ingest dobara chalao.
 - `kb/retriever.py`: `search_policy(session, query, k=4)`. Jawab mein hamesha doc aur section hota hai. Similarity kam ho (`SHOP_KB_MIN_SCORE`) to `NO_POLICY_FOUND` aata hai aur agent ko escalate karna hai.
+- `SHOP_KB_MIN_SCORE=0.60`: andaze se nahi, data se chuna. Is model mein off-topic sawal bhi 0.36 se 0.50 score le jate hain, aur asli sawal 0.71 se upar rehte hain, to 0.60 beech mein hai.
 - `scripts/ingest_policies.py`: policies index karta hai. `--search "sawal"` se top matches aur unke scores dikhata hai.
-- Tests: `tests/unit/test_kb_ingest.py` (chunking aur ingest) aur `tests/integration/test_kb_retrieval.py` (10 sawal, sahi section top 3 mein).
+- `scripts/check_threshold.py`: 10 asli aur 5 off-topic sawal chala kar dono groups ka top-1 score dikhata hai aur beech ka threshold suggest karta hai. Model ya policies badlen to dobara chalao.
+- Tests: `tests/unit/test_kb_ingest.py` (chunking aur ingest, nakli embedder) aur `tests/integration/test_kb_retrieval.py` (asli model, 10 sawal, sahi section top 3 mein). Dono pass hain.
+- Abhi ke 15 chunks: exchange 4, returns 7, shipping 4.
 
 ```bat
 uv run python scripts/ingest_policies.py
 uv run python scripts/ingest_policies.py --search "how long does delivery take"
+uv run python scripts/check_threshold.py
 ```
 
 ## Step H: Database schema aur migrations
@@ -177,6 +183,40 @@ uv run pytest tests/unit/test_db_models.py
 
 MockShop tables (Step E) alag `MockBase` mein hain aur Alembic unhe nahi chhoota.
 
+## Step I: Tool layer (agent ke haath)
+
+**Kya karta hai:** Agent ki har salahiyat (order dekhna, refund karna, email bhejna) ko ek typed, guarded tool bana deta hai. Agent dunya ko sirf in tools se chhuta hai.
+
+**Kyun zaroori:** Model sirf chhote arguments deta hai (jaise `order_id`, `amount_pkr`). Kaun poochh raha hai, kis customer ka ticket hai, kya role hai: ye sab model se nahi, code se aata hai. Is liye prompt injection se koi doosre customer ka order nahi dekh sakta aur na paise nikal sakta hai.
+
+**Kya hai (`src/shoppilot/tools/`):**
+- `context.py`: `RunContext` (shop, ticket, customer ki email, role). API ise JWT aur ticket se bharti hai, model se kabhi nahi. Is mein `tool_guard` (har tool ko budget, role check aur error-ko-result mein badalna), `find_action` / `record_action` (idempotency) aur `audit` bhi hain.
+- `orders.py`: `get_order`, `find_orders_by_email`, `track_shipment`, `search_policy` (sab sirf padhte hain).
+- `refunds.py`: `propose_refund` (sirf hisaab, paisa nahi hilta) aur `issue_refund` (paisa).
+- `email.py`: `send_customer_email` aur `escalate_to_human`.
+- `inventory.py`: `get_inventory`, `create_purchase_order_draft`.
+- `listings.py`: `get_product`, `create_product_draft`.
+
+| Hifazati usool | Kaise |
+|---|---|
+| Sirf apna order | Doosre customer ka order aur jo order hai hi nahi: dono par ek jaisa `ORDER_NOT_FOUND`, is liye kuch leak nahi hota |
+| Model ko chhota jawab | Order ka `note` (customer ka untrusted text), flagged customer aur refund history model ko nahi dikhte |
+| Budget | Har ticket par 6 reads aur 2 writes, warna `BUDGET_EXCEEDED` |
+| Role | Viewer sirf padh sakta hai, write tool par `FORBIDDEN` |
+| Dobara check | `issue_refund` ke andar policy engine phir chalta hai, aur manager/owner tier par approved `approval_id` chahiye |
+| Retry safe | Har write tool `idempotency_key` leta hai. Same key par pehla result wapas aata hai, dobara refund ya draft nahi banta |
+| Draft only | Purchase order aur product listing hamesha draft hote hain, agent publish ya supplier ko email nahi karta |
+| Email | Recipient hamesha ticket ka customer. Template plus chhote fields, aur fields mein `@` ya link allowed nahi. Ek ticket par 3 emails tak |
+| Escape hatch | `escalate_to_human` par budget aur role check nahi, hamesha chalta hai |
+| Errors | Tool kabhi crash nahi karta, `{"ok": false, "error": "ORDER_NOT_FOUND"}` jaisa result deta hai jo model parh kar react kar sake |
+
+**Abhi baqi / alag hai:**
+- Tests (`tests/unit/test_tools.py`) abhi nahi likhe gaye. Step I tab "Done" hoga jab double refund, doosre customer ka order, viewer ka write aur budget wale tests pass hon.
+- `sales_summary` Step P (Reports agent) mein banega, kyunke is ke liye `ShopBackend` mein nayi method chahiye.
+- Email abhi sirf ticket par "outbound message" ke tor par save hota hai. SMTP se bhejna Step P mein aayega.
+- Timeouts Shopify lagne par `shopify.py` mein aayenge (MockShop local hai).
+- Approval ka qaida (Step M ko follow karna hai): `status == "approved"`, ticket wahi, `tier` kam az kam engine ke tier jitna, aur `payload_json["amount_pkr"]` refund ko cover kare.
+
 ---
 
 ## Project ka naqsha
@@ -188,7 +228,8 @@ src/shoppilot/
   policy/    refund rules, limits               (F)
   db/        tables + Alembic migrations        (H)
   kb/        policy knowledge base              (G)
-  tools/ agents/ approvals/ guardrails/ api/    (I se T, abhi khali)
+  tools/     typed, guarded tools               (I, tests baqi)
+  agents/ approvals/ guardrails/ api/           (J se T, abhi khali)
 configs/     settings, policy docs, prompts
 scripts/     seed, logs, ingest, eval
 tests/       unit, graph, integration, redteam
