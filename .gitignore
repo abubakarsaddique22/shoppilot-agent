@@ -16,6 +16,8 @@ htmlcov/
 dist/
 build/
 *.pem
+# fastembed model cache (a few hundred MB)
+.cache/
 # logs: folder rahe, files git mein na jayein
 logs/*.log
 logs/*.log.*

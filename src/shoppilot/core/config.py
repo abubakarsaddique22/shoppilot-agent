@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     log_to_console: bool = True
 
     database_url: str = "postgresql+psycopg://shop:shop@localhost:5432/shoppilot"
-    llm_provider: str = "google"          # google | groq | ollama | anthropic
+    llm_provider: str = "groq"          # google | groq | ollama | anthropic
     llm_model: str = "set-in-env"
     llm_api_key: str = ""
     jwt_secret: str = "dev-only-change-me"
@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     max_retries: int = 2
     run_timeout_s: int = 45
     approval_ttl_hours: int = 48
-    kb_min_score: float = 0.35
+    kb_min_score: float = 0.60
+    embedding_model: str = "BAAI/bge-small-en-v1.5"  # fastembed model, 384 numbers per text; must match EMBEDDING_DIM in db/models.py
     s3_bucket: str = ""
 
     langsmith_tracing: bool = False

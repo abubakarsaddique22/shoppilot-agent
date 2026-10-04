@@ -36,7 +36,7 @@ uv run uvicorn shoppilot.api.main:app --reload
 | D | Config, secrets, logging | Done |
 | E | Store backend + 200 fake orders (MockShop) | Done (Shopify baad mein) |
 | F | Policy engine (refund rules) | Done |
-| G | Policy knowledge base (RAG) | Pending |
+| G | Policy knowledge base (RAG) | Done (code likha, tests chalane baqi) |
 | H | Database tables + migrations | Done |
 
 Baqi steps (I se Z): tools, agents, approval, API, UI, evaluation, AWS deploy. Dekho blueprint.
@@ -133,9 +133,23 @@ Jab asli Shopify lagega to MockShop tables ki zaroorat nahi rahegi, sirf `base.p
 
 Hard rules jo koi approval nahi tod sakti: refund kabhi (paid minus pehle ke refunds) se zyada nahi, aur ek order par ek hi open refund.
 
-## Step G: Policy knowledge base (abhi baqi)
+## Step G: Policy knowledge base (RAG)
 
-Policy documents ko chunks mein tod kar pgvector mein rakhna, taake agent `search_policy` tool se policy quote kar sake. Files (`kb/ingest.py`, `kb/retriever.py`) abhi khali hain.
+**Kya karta hai:** Policy documents ko search ke qabil banata hai, taake agent policy ka sahi hissa dhoond kar quote kare.
+
+**Kyun zaroori:** Agent policy ko guess na kare. Knowledge base customer ko policy samjhati hai, aur paise ka faisla phir bhi policy engine (Step F) karta hai.
+
+**Kya hai:**
+- `kb/ingest.py`: `configs/policies/*.md` ko section ke hisaab se chunks mein todta hai. Har chunk ke shuru mein heading path hota hai (jaise `Returns > Damaged items`). Dobara chalane par purani rows replace hoti hain.
+- `kb/embeddings.py`: sentence-transformers (Hugging Face model, apni machine par CPU par chalta hai, API key nahi chahiye). Model pehli baar download hota hai `.cache/huggingface` mein. Default model `paraphrase-multilingual-MiniLM-L12-v2` hai (384 numbers), badalna ho to `SHOP_EMBEDDING_MODEL`.
+- `kb/retriever.py`: `search_policy(session, query, k=4)`. Jawab mein hamesha doc aur section hota hai. Similarity kam ho (`SHOP_KB_MIN_SCORE`) to `NO_POLICY_FOUND` aata hai aur agent ko escalate karna hai.
+- `scripts/ingest_policies.py`: policies index karta hai. `--search "sawal"` se top matches aur unke scores dikhata hai.
+- Tests: `tests/unit/test_kb_ingest.py` (chunking aur ingest) aur `tests/integration/test_kb_retrieval.py` (10 sawal, sahi section top 3 mein).
+
+```bat
+uv run python scripts/ingest_policies.py
+uv run python scripts/ingest_policies.py --search "how long does delivery take"
+```
 
 ## Step H: Database schema aur migrations
 
@@ -173,7 +187,7 @@ src/shoppilot/
   shop/      ShopBackend + MockShop + seed      (E)
   policy/    refund rules, limits               (F)
   db/        tables + Alembic migrations        (H)
-  kb/        policy knowledge base              (G, abhi khali)
+  kb/        policy knowledge base              (G)
   tools/ agents/ approvals/ guardrails/ api/    (I se T, abhi khali)
 configs/     settings, policy docs, prompts
 scripts/     seed, logs, ingest, eval

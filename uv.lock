@@ -3304,7 +3304,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.108" },
     { name = "email-validator", specifier = ">=2.3.0" },
     { name = "fastapi", specifier = ">=0.142.2" },
-    { name = "fastembed", specifier = ">=0.8.1" },
+    { name = "fastembed", specifier = ">=0.7.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6" },
     { name = "langchain", specifier = ">=1.4.3" },

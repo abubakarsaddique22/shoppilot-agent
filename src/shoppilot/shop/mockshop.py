@@ -370,3 +370,5 @@ class MockShop:
             has_open_refund=any(t.status == "pending" for t in refund_txs),
             non_refundable=any(_has_tag(p.tags, "non-refundable") for _, p in item_rows),
         )
+
+
