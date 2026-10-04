@@ -1,0 +1,16 @@
+# Local dev: sirf Postgres (pgvector). Prod compose ke liye blueprint section 17.1 dekho.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: shoppilot
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shop}
+    ports: ["5432:5432"]          # local dev only; prod mein ports hata do
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shoppilot"]
+      interval: 5s
+      retries: 10
+volumes:
+  pgdata: {}

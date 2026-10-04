@@ -1,0 +1,15 @@
+:80 {   # domain ho to ":80" ki jagah shop.example.com likho
+    encode gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'"
+    }
+    handle_path /api/* {
+        reverse_proxy api:8000 { flush_interval -1 }
+    }
+    handle {
+        root * /srv/ui
+        file_server
+    }
+}

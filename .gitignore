@@ -1,0 +1,25 @@
+.env
+.env_REFRENCE
+.env_*
+.env.*
+!.env.example
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+*.pem
+# logs: folder rahe, files git mein na jayein
+logs/*.log
+logs/*.log.*
+!logs/.gitkeep
+data/eval/results/*
+!data/eval/results/.gitkeep
+.DS_Store

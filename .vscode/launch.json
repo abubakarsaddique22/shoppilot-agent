@@ -1,0 +1,9 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "API (uvicorn)", "type": "debugpy", "request": "launch", "module": "uvicorn",
+      "args": ["shoppilot.api.main:app", "--reload"], "envFile": "${workspaceFolder}/.env" },
+    { "name": "Demo logging", "type": "debugpy", "request": "launch",
+      "program": "${workspaceFolder}/scripts/demo_logging.py", "env": { "PYTHONPATH": "${workspaceFolder}/src" } }
+  ]
+}
