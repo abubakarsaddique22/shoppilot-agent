@@ -39,8 +39,8 @@ uv run uvicorn shoppilot.api.main:app --reload
 | F | Policy engine (refund rules) | Done |
 | G | Policy knowledge base (RAG, fastembed) | Done (22 tests pass, threshold data se chuna) |
 | H | Database tables + migrations | Done |
-| I | Tools (agent ke haath) | Done (33 tests pass) |
-| J | Pehla agent aur LangSmith dataset v0 | Done (Groq par 15 mein se 15 cases pass) |
+| I | Tools (agent ke haath) | Done (37 tests pass) |
+| J | Pehla agent aur LangSmith dataset v0 | Done (Groq par 15/15, aur 3 repeats mein 45/45 pass) |
 
 Baqi steps (K se Z): graph, approval, router, API, UI, evaluation, AWS deploy. Dekho blueprint.
 
@@ -212,8 +212,7 @@ MockShop tables (Step E) alag `MockBase` mein hain aur Alembic unhe nahi chhoota
 | Errors | Tool kabhi crash nahi karta, `{"ok": false, "error": "ORDER_NOT_FOUND"}` jaisa result deta hai jo model parh kar react kar sake |
 
 **Abhi baqi / alag hai:**
-- Tests: `tests/unit/test_tools.py` (33 pass, koi Docker ya model download nahi chahiye). Ye check karte hain: doosre customer ka order nahi dikhta, same key par refund ek hi dafa hota hai, manager/owner tier bina sahi approval ke nahi chalta, viewer write nahi kar sakta, budget khatam hone par `BUDGET_EXCEEDED`, email aur draft ki hadein.
-- `get_product` aur `get_inventory` ke apne alag tests abhi `test_tools.py` mein nahi hain.
+- Tests: `tests/unit/test_tools.py` (37 pass, koi Docker ya model download nahi chahiye). Ye check karte hain: doosre customer ka order nahi dikhta, same key par refund ek hi dafa hota hai, manager/owner tier bina sahi approval ke nahi chalta, viewer write nahi kar sakta, budget khatam hone par `BUDGET_EXCEEDED`, email aur draft ki hadein, `get_inventory` ka `days_of_stock` (sales 0 ho to `None`), `get_product` ka chhota summary aur galat SKU par `PRODUCT_NOT_FOUND`.
 - `sales_summary` Step P (Reports agent) mein banega, kyunke is ke liye `ShopBackend` mein nayi method chahiye.
 - Email abhi sirf ticket par "outbound message" ke tor par save hota hai. SMTP se bhejna Step P mein aayega.
 - Timeouts Shopify lagne par `shopify.py` mein aayenge (MockShop local hai).
@@ -238,7 +237,9 @@ MockShop tables (Step E) alag `MockBase` mein hain aur Alembic unhe nahi chhoota
 | `no_promise` | Jawab mein refund ya replacement ka wada nahi |
 | `reply_ok` | Jawab mein wo hai jo hona chahiye aur wo nahi jo nahi dikhna chahiye (jaise doosre customer ka order) |
 
-Ek case tab pass hota hai jab teeno 1 hon. **Natija: 15 mein se 15 pass** (Groq `openai/gpt-oss-120b`). Step J ka target kam az kam 13 tha. 15 cases par ek hi run hai, is liye ye baseline hai, koi pakka daawa nahi.
+Ek case tab pass hota hai jab teeno 1 hon. **Natija: 15 mein se 15 pass** (Groq `openai/gpt-oss-120b`), aur `--repeats 3` (har case 3 baar) par bhi **45 mein se 45 pass**. Step J ka target kam az kam 13 tha. Ye abhi sirf 15 cases ka baseline hai, bara muqabla Step U mein 60 cases par hoga.
+
+`order_not_found` aur `other_customer` cases mein terminal par `tool get_order failed: ORDER_NOT_FOUND` likha aata hai. Ye theek hai: tool ghalat order par crash nahi karta, error ko result bana kar model ko deta hai, aur ye cases yahi dekhte hain.
 
 Cases ki categories: delivered, in_transit, late_shipped, late_delivered, policy, no_order_number, order_not_found, other_customer, refund_request, injection, off_topic.
 

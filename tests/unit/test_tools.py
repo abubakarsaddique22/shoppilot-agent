@@ -18,14 +18,14 @@ from shoppilot.db.models import ActionRow, AppBase, ApprovalRow, AuditLogRow, Me
 from shoppilot.db.session import make_engine, make_session_factory
 from shoppilot.kb.retriever import PolicyHit, PolicySearchResult
 from shoppilot.shop.base import Order
-from shoppilot.shop.mock_models import OrderRow, ProductRow, PurchaseOrderDraftRow
+from shoppilot.shop.mock_models import InventoryLevelRow, OrderRow, ProductRow, PurchaseOrderDraftRow, VariantRow
 from shoppilot.shop.mockshop import MockShop
 from shoppilot.shop.seed import seed_database
 from shoppilot.tools import orders as orders_module
 from shoppilot.tools.context import MAX_WRITES, RunContext, ctx_var
 from shoppilot.tools.email import escalate_to_human, send_customer_email
-from shoppilot.tools.inventory import MAX_PO_QTY, create_purchase_order_draft
-from shoppilot.tools.listings import create_product_draft
+from shoppilot.tools.inventory import MAX_PO_QTY, create_purchase_order_draft, get_inventory
+from shoppilot.tools.listings import create_product_draft, get_product
 from shoppilot.tools.orders import find_orders_by_email, get_order, search_policy, track_shipment
 from shoppilot.tools.refunds import issue_refund, propose_refund
 
@@ -367,6 +367,47 @@ def test_product_draft_stays_a_draft_and_escapes_html(env):
     assert row.status == "draft"
     assert "<script>" not in row.body_html and "&lt;script&gt;" in row.body_html
     assert "<b>" not in row.body_html and "<li>Breathable &lt;b&gt;cotton&lt;/b&gt;</li>" in row.body_html
+
+
+# ------------------------------------------------------ inventory and product reads
+def test_get_inventory_shows_stock_and_days_left(env):
+    late = orders_of(env, "late_delivery")[0]
+    env.start(late.customer_email)
+    level = env.shop.get_inventory("EARBUDS-TWS-01")
+    result = get_inventory.invoke({"sku": "EARBUDS-TWS-01"})
+    expected_days = round(level.on_hand / level.avg_daily_sales, 1) if level.avg_daily_sales > 0 else None
+    assert result["ok"] and result["sku"] == "EARBUDS-TWS-01"
+    assert result["on_hand"] == level.on_hand and result["reorder_point"] == level.reorder_point
+    assert result["days_of_stock"] == expected_days
+
+
+def test_get_inventory_with_no_sales_has_no_days_of_stock(env):
+    late = orders_of(env, "late_delivery")[0]
+    env.start(late.customer_email)
+    with env.sf() as s:
+        variant = s.scalar(select(VariantRow).where(VariantRow.sku == "EARBUDS-TWS-01"))
+        level = s.scalar(select(InventoryLevelRow).where(InventoryLevelRow.inventory_item_id == variant.inventory_item_id))
+        level.avg_daily_sales = 0
+        s.commit()
+    result = get_inventory.invoke({"sku": "EARBUDS-TWS-01"})
+    assert result["ok"] and result["days_of_stock"] is None  # no division by zero
+
+
+def test_get_product_returns_a_small_summary(env):
+    late = orders_of(env, "late_delivery")[0]
+    env.start(late.customer_email)
+    product = env.shop.get_product("EARBUDS-TWS-01")
+    result = get_product.invoke({"sku": "EARBUDS-TWS-01"})
+    assert result["ok"] and result["title"] == product.title and result["price_pkr"] == product.price_pkr
+    assert result["refundable"] == product.refundable
+    assert set(result) == {"ok", "sku", "title", "category", "price_pkr", "refundable", "supplier"}
+
+
+def test_unknown_sku_gives_a_structured_error(env):
+    late = orders_of(env, "late_delivery")[0]
+    env.start(late.customer_email)
+    assert get_product.invoke({"sku": "NO-SUCH-SKU"})["error"] == "PRODUCT_NOT_FOUND"
+    assert get_inventory.invoke({"sku": "NO-SUCH-SKU"})["error"] == "PRODUCT_NOT_FOUND"
 
 
 # ------------------------------------------------------------ policy search
