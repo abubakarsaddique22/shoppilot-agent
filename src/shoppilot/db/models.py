@@ -13,7 +13,19 @@ from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, BigInteger, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

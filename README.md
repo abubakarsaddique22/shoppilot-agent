@@ -27,7 +27,7 @@ uv run uvicorn shoppilot.api.main:app --reload
 
 `.env` mein apni `SHOP_LLM_API_KEY` aur `LANGSMITH_API_KEY` daalo. API docs: http://127.0.0.1:8000/docs
 
-## Ab tak ka status (Steps A se I)
+## Ab tak ka status (Steps A se J)
 
 | Step | Kaam | Status |
 |---|---|---|
@@ -40,8 +40,9 @@ uv run uvicorn shoppilot.api.main:app --reload
 | G | Policy knowledge base (RAG, fastembed) | Done (22 tests pass, threshold data se chuna) |
 | H | Database tables + migrations | Done |
 | I | Tools (agent ke haath) | Done (33 tests pass) |
+| J | Pehla agent aur LangSmith dataset v0 | Done (Groq par 15 mein se 15 cases pass) |
 
-Baqi steps (J se Z): agents, approval, API, UI, evaluation, AWS deploy. Dekho blueprint.
+Baqi steps (K se Z): graph, approval, router, API, UI, evaluation, AWS deploy. Dekho blueprint.
 
 ---
 
@@ -212,10 +213,54 @@ MockShop tables (Step E) alag `MockBase` mein hain aur Alembic unhe nahi chhoota
 
 **Abhi baqi / alag hai:**
 - Tests: `tests/unit/test_tools.py` (33 pass, koi Docker ya model download nahi chahiye). Ye check karte hain: doosre customer ka order nahi dikhta, same key par refund ek hi dafa hota hai, manager/owner tier bina sahi approval ke nahi chalta, viewer write nahi kar sakta, budget khatam hone par `BUDGET_EXCEEDED`, email aur draft ki hadein.
+- `get_product` aur `get_inventory` ke apne alag tests abhi `test_tools.py` mein nahi hain.
 - `sales_summary` Step P (Reports agent) mein banega, kyunke is ke liye `ShopBackend` mein nayi method chahiye.
 - Email abhi sirf ticket par "outbound message" ke tor par save hota hai. SMTP se bhejna Step P mein aayega.
 - Timeouts Shopify lagne par `shopify.py` mein aayenge (MockShop local hai).
 - Approval ka qaida (Step M ko follow karna hai): `status == "approved"`, ticket wahi, `tier` kam az kam engine ke tier jitna, aur `payload_json["amount_pkr"]` refund ko cover kare.
+
+## Step J: Pehla agent aur pehle traces
+
+**Kya karta hai:** Ek bohat chhota agent banata hai jo sirf order-status tickets ka jawab deta hai, aur uska har qadam LangSmith mein nazar aata hai. Graph aur structure Step K mein aayega. Yahan sirf ye dekhna hai ke model kahan hichkichata, loop karta ya andaza lagata hai.
+
+**Kyun zaroori:** Structure banane se pehle pata hona chahiye ke model tools sahi chalata hai ya nahi. Aur ye 15 cases ka dataset aage ki evaluation (Step U) ka beej hai. Aaj ka natija wo baseline hai jis se Step K ka naya graph mukable karega.
+
+**Kya hai:**
+- `agents/simple_agent.py`: ReAct agent (`create_agent`) jis ke paas 3 read tools hain: `get_order`, `track_shipment`, `search_policy`. Customer ka message `<customer_message>` tags mein jata hai aur prompt kehta hai ke ye data hai, hukm nahi. Agent sirf padh sakta hai, refund ya replacement ka wada nahi karta, aur customer ki zubaan (English ya Roman Urdu) mein 2 se 4 chhote jumlon mein jawab deta hai.
+- `core/llm.py`: model sirf `.env` se aata hai (`SHOP_LLM_PROVIDER`, `SHOP_LLM_MODEL`). Abhi Groq `openai/gpt-oss-120b` hai. Model badalna ho to sirf `.env` badlo, code nahi. Models ka proper muqabla Step U mein 60 cases par hoga.
+- `scripts/run_agent.py`: 10 tayyar tickets (ya apna ticket) chala kar dikhata hai ke agent ne kaunse tools chalaye aur kya jawab diya.
+- `scripts/create_dataset_v0.py`: LangSmith par dataset `shoppilot-support-v0` banata hai (15 cases). Case mein asli order number nahi hota, balkay scenario aur index hota hai (jaise "late_delivery ka 4th order"), is liye store dobara seed karne par bhi dataset chalta hai.
+- `scripts/eval_v0.py`: 15 cases chala kar teen plain-Python evaluators se number deta hai.
+
+| Evaluator | Kya check karta hai |
+|---|---|
+| `tools_ok` | Zaroori tools chale aur mana wale tools nahi chale |
+| `no_promise` | Jawab mein refund ya replacement ka wada nahi |
+| `reply_ok` | Jawab mein wo hai jo hona chahiye aur wo nahi jo nahi dikhna chahiye (jaise doosre customer ka order) |
+
+Ek case tab pass hota hai jab teeno 1 hon. **Natija: 15 mein se 15 pass** (Groq `openai/gpt-oss-120b`). Step J ka target kam az kam 13 tha. 15 cases par ek hi run hai, is liye ye baseline hai, koi pakka daawa nahi.
+
+Cases ki categories: delivered, in_transit, late_shipped, late_delivered, policy, no_order_number, order_not_found, other_customer, refund_request, injection, off_topic.
+
+**Test kaise karein:**
+
+```bat
+uv run ruff check .
+uv run pytest
+uv run python scripts/run_agent.py --preset 4
+uv run python scripts/run_agent.py --all
+uv run python scripts/run_agent.py --ticket "Mera order #88601 kahan hai?" --email ali@example.com
+uv run python scripts/create_dataset_v0.py
+uv run python scripts/eval_v0.py
+uv run python scripts/eval_v0.py --repeats 3
+```
+
+- `run_agent.py` aur `eval_v0.py` ko seeded Postgres (`seed_mockshop.py`), indexed policies (`ingest_policies.py`) aur `.env` mein Groq aur LangSmith keys chahiye.
+- `create_dataset_v0.py` ek hi dafa chalana hai. Dobara banana ho to `--recreate`.
+- `--repeats 3` har case 3 baar chalata hai. Model ka jawab har dafa thoda alag ho sakta hai, is liye ek lucky pass pe poora bharosa nahi.
+- Har run LangSmith project `shoppilot-dev` mein dikhta hai (har node, LLM call aur tool call).
+
+Step J ke apne alag unit tests nahi hain, kyunke ye asli model par chalne wali evaluation hai. `uv run pytest` sirf ye confirm karta hai ke baqi project nahi toota.
 
 ---
 
@@ -223,13 +268,14 @@ MockShop tables (Step E) alag `MockBase` mein hain aur Alembic unhe nahi chhoota
 
 ```
 src/shoppilot/
-  core/      config, logging, errors            (D)
+  core/      config, logging, errors, llm       (D, J)
   shop/      ShopBackend + MockShop + seed      (E)
   policy/    refund rules, limits               (F)
   db/        tables + Alembic migrations        (H)
   kb/        policy knowledge base              (G)
   tools/     typed, guarded tools               (I)
-  agents/ approvals/ guardrails/ api/           (J se T, abhi khali)
+  agents/    simple_agent.py                    (J; baqi files K se abhi khali)
+  approvals/ guardrails/ api/                   (M se T, abhi khali)
 configs/     settings, policy docs, prompts
 scripts/     seed, logs, ingest, eval
 tests/       unit, graph, integration, redteam

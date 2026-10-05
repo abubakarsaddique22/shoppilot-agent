@@ -13,9 +13,10 @@ class Settings(BaseSettings):
     log_to_console: bool = True
 
     database_url: str = "postgresql+psycopg://shop:shop@localhost:5432/shoppilot"
-    llm_provider: str = "groq"          # google | groq | ollama | anthropic
+    llm_provider: str = "groq"          # groq | google
     llm_model: str = "set-in-env"
-    llm_api_key: str = ""
+    llm_api_key: str = ""               # Groq key
+    google_api_key: str = ""            # Gemini key (Google AI Studio)
     jwt_secret: str = "dev-only-change-me"
 
     auto_refund_limit_pkr: int = 3000

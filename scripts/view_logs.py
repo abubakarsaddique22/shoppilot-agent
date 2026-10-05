@@ -32,7 +32,7 @@ def fmt(e: dict, color: bool) -> str:
         out += f"  {json.dumps(e['extra'], ensure_ascii=False)}"
     if exc := e.get("exception"):
         out += f"\n    >>> {exc['type']}: {exc['message']}\n    where: {e.get('where')}\n"
-        out += "\n".join("    " + l for l in exc["traceback"].splitlines())
+        out += "\n".join("    " + line for line in exc["traceback"].splitlines())
     return out
 
 

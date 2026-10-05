@@ -17,7 +17,7 @@ def test_files_written(tmp_path):
     with bind_context(ticket_id="T-1"):
         log.info("hello")
         try:
-            1 / 0
+            _ = 1 / 0
         except ZeroDivisionError:
             log.exception("boom")
     first = [json.loads(x) for x in (tmp_path / "app.log").read_text().splitlines()]

@@ -1,5 +1,7 @@
 """Logging + exceptions ka demo: python scripts/demo_logging.py  ->  phir  python scripts/view_logs.py"""
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))  # bina install ke bhi chale
 from shoppilot.core.errors import OrderNotFound, PolicyDenied
 from shoppilot.core.logging import bind_context, get_logger, setup_logging

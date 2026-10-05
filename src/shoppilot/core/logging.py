@@ -25,11 +25,12 @@ import logging.handlers
 import re
 import sys
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 # ---------------------------------------------------------------- context ---
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
@@ -107,7 +108,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         data: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec="milliseconds"),
+            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
