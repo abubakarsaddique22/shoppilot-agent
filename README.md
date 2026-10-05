@@ -39,7 +39,7 @@ uv run uvicorn shoppilot.api.main:app --reload
 | F | Policy engine (refund rules) | Done |
 | G | Policy knowledge base (RAG, fastembed) | Done (22 tests pass, threshold data se chuna) |
 | H | Database tables + migrations | Done |
-| I | Tools (agent ke haath) | Code likha, tests baqi |
+| I | Tools (agent ke haath) | Done (33 tests pass) |
 
 Baqi steps (J se Z): agents, approval, API, UI, evaluation, AWS deploy. Dekho blueprint.
 
@@ -211,7 +211,7 @@ MockShop tables (Step E) alag `MockBase` mein hain aur Alembic unhe nahi chhoota
 | Errors | Tool kabhi crash nahi karta, `{"ok": false, "error": "ORDER_NOT_FOUND"}` jaisa result deta hai jo model parh kar react kar sake |
 
 **Abhi baqi / alag hai:**
-- Tests (`tests/unit/test_tools.py`) abhi nahi likhe gaye. Step I tab "Done" hoga jab double refund, doosre customer ka order, viewer ka write aur budget wale tests pass hon.
+- Tests: `tests/unit/test_tools.py` (33 pass, koi Docker ya model download nahi chahiye). Ye check karte hain: doosre customer ka order nahi dikhta, same key par refund ek hi dafa hota hai, manager/owner tier bina sahi approval ke nahi chalta, viewer write nahi kar sakta, budget khatam hone par `BUDGET_EXCEEDED`, email aur draft ki hadein.
 - `sales_summary` Step P (Reports agent) mein banega, kyunke is ke liye `ShopBackend` mein nayi method chahiye.
 - Email abhi sirf ticket par "outbound message" ke tor par save hota hai. SMTP se bhejna Step P mein aayega.
 - Timeouts Shopify lagne par `shopify.py` mein aayenge (MockShop local hai).
@@ -228,7 +228,7 @@ src/shoppilot/
   policy/    refund rules, limits               (F)
   db/        tables + Alembic migrations        (H)
   kb/        policy knowledge base              (G)
-  tools/     typed, guarded tools               (I, tests baqi)
+  tools/     typed, guarded tools               (I)
   agents/ approvals/ guardrails/ api/           (J se T, abhi khali)
 configs/     settings, policy docs, prompts
 scripts/     seed, logs, ingest, eval
