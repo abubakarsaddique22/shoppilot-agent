@@ -41,6 +41,26 @@ log = get_logger(__name__)
 MAX_WRITES = 2  # Table 13: 6 reads (settings.max_tool_calls) and 2 writes per ticket
 WRITE_ROLES = {"support", "manager", "owner", "admin", "system"}  # a viewer can read but never write
 
+# Step O: every agent has its own tool allow-list. The tool layer enforces it, whatever the model asks for.
+# escalate_to_human is the safe exit, so every agent has it. sales_summary is built with the Reports agent (Step P).
+AGENT_TOOLS: dict[str, frozenset[str]] = {
+    "support": frozenset(
+        {
+            "get_order",
+            "find_orders_by_email",
+            "track_shipment",
+            "search_policy",
+            "propose_refund",
+            "issue_refund",
+            "send_customer_email",
+            "escalate_to_human",
+        }
+    ),
+    "inventory": frozenset({"get_inventory", "get_product", "create_purchase_order_draft", "escalate_to_human"}),
+    "listing": frozenset({"get_product", "create_product_draft", "escalate_to_human"}),
+    "reports": frozenset({"sales_summary", "get_inventory", "get_product", "escalate_to_human"}),
+}
+
 
 @dataclass
 class RunContext:
@@ -54,6 +74,7 @@ class RunContext:
     now: Callable[[], datetime] = utcnow  # tests pass a fixed clock
     reads_used: int = 0
     writes_used: int = 0
+    agent: str = ""  # support | inventory | listing | reports. "" means no allow-list (tests, scripts)
 
 
 ctx_var: ContextVar[RunContext] = ContextVar("run_ctx")
@@ -80,6 +101,13 @@ def use_call_budget(kind: Literal["read", "write"]) -> RunContext:
     return ctx
 
 
+def _check_agent_allowed(tool_name: str) -> None:
+    """Raise FORBIDDEN when the running agent does not have this tool. Checked before the budget is used."""
+    ctx = ctx_var.get(None)
+    if ctx is not None and ctx.agent and tool_name not in AGENT_TOOLS.get(ctx.agent, frozenset()):
+        raise PermissionDenied(f"the {ctx.agent} agent may not use {tool_name}")
+
+
 def tool_guard(kind: Literal["read", "write"] | None = "read") -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Put under @tool. kind=None means no budget and no role check (escalate_to_human, the safe exit)."""
 
@@ -87,6 +115,7 @@ def tool_guard(kind: Literal["read", "write"] | None = "read") -> Callable[[Call
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
+                _check_agent_allowed(fn.__name__)
                 if kind == "write" and get_ctx().actor_role not in WRITE_ROLES:
                     raise PermissionDenied(f"role {get_ctx().actor_role} cannot use write tools")
                 if kind is not None:

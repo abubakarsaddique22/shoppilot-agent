@@ -236,6 +236,8 @@ def _install_excepthooks() -> None:
         log.critical("uncaught exception", exc_info=(exc_type, exc, tb))
 
     def _thread_hook(args: threading.ExceptHookArgs) -> None:
+        if args.exc_value is None:
+            return
         log.critical(
             "uncaught exception in thread %s", getattr(args.thread, "name", "?"),
             exc_info=(args.exc_type, args.exc_value, args.exc_traceback),

@@ -6,6 +6,7 @@
     SHOP_GOOGLE_API_KEY=...           # Gemini key (Google AI Studio)
 """
 from langchain_core.language_models import BaseChatModel
+from pydantic import SecretStr
 
 from shoppilot.core.config import settings
 from shoppilot.core.errors import ConfigError
@@ -21,7 +22,8 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
     if provider == "groq":
         from langchain_groq import ChatGroq
 
-        return ChatGroq(model=model, api_key=settings.llm_api_key or None, temperature=temperature, timeout=settings.run_timeout_s)
+        api_key = SecretStr(settings.llm_api_key) if settings.llm_api_key else None
+        return ChatGroq(model=model, api_key=api_key, temperature=temperature, timeout=settings.run_timeout_s)
     if provider == "google":
         from langchain_google_genai import ChatGoogleGenerativeAI
 

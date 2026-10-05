@@ -6,7 +6,10 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 
+from shoppilot.agents.checkpoint import close_checkpointer, open_checkpointer
+from shoppilot.agents.support import build_support_graph
 from shoppilot.core.config import settings
 from shoppilot.core.errors import OrderNotFound, register_exception_handlers
 from shoppilot.core.logging import bind_context, get_logger, setup_logging
@@ -18,7 +21,23 @@ log = get_logger("shoppilot.api")
 async def lifespan(app: FastAPI):
     setup_logging(settings.log_level, settings.log_dir, settings.log_to_console)
     log.info("api starting", extra={"env": settings.env})
+
+    # Step N: the Postgres checkpointer and the support graph live for the whole life of the process.
+    # If the database is down the API still starts (health, docs), but app.state.graph stays None and runs are refused.
+    app.state.checkpointer = None
+    app.state.graph = None
+    try:
+        saver = await run_in_threadpool(open_checkpointer)  # blocking connect, so not on the event loop
+        app.state.checkpointer = saver
+        app.state.graph = build_support_graph(saver)
+        log.info("checkpointer ready")
+    except Exception:
+        log.warning("checkpointer unavailable: agent runs cannot start", exc_info=True)
+
     yield
+
+    if app.state.checkpointer is not None:
+        await run_in_threadpool(close_checkpointer, app.state.checkpointer)
     log.info("api stopped")
 
 
