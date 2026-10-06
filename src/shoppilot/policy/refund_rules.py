@@ -43,8 +43,11 @@ def _deny(reason: str, ref: str) -> RefundDecision:
     return RefundDecision(tier="deny", allowed_amount=0, reasons=[reason], policy_refs=[ref])
 
 
-def _unique(items: list[str]) -> list[str]:
-    return list(dict.fromkeys(items))
+def _decide(tier: Tier, allowed: int, reasons: list[str], refs: list[str]) -> RefundDecision:
+    """Build a decision. The limits section is always cited; duplicates are removed."""
+    return RefundDecision(
+        tier=tier, allowed_amount=allowed, reasons=reasons, policy_refs=list(dict.fromkeys(refs + [REF_LIMITS]))
+    )
 
 
 def evaluate_refund(
@@ -120,9 +123,7 @@ def evaluate_refund(
     if allowed > cfg.manager_limit_pkr:
         owner.append(f"amount {allowed} is above the manager limit {cfg.manager_limit_pkr}")
     if owner:
-        return RefundDecision(
-            tier="owner", allowed_amount=allowed, reasons=why + owner, policy_refs=_unique(refs + [REF_LIMITS])
-        )
+        return _decide("owner", allowed, why + owner, refs)
 
     # --- manager tier -------------------------------------------------------------------------
     manager: list[str] = []
@@ -141,20 +142,11 @@ def evaluate_refund(
     if requested_amount > remaining:
         manager.append(f"requested {requested_amount} is above the refundable balance {remaining}; reduced")
     if manager:
-        return RefundDecision(
-            tier="manager", allowed_amount=allowed, reasons=why + manager, policy_refs=_unique(refs + [REF_LIMITS])
-        )
+        return _decide("manager", allowed, why + manager, refs)
 
     # --- store-wide daily cap for automatic refunds -------------------------------------------
     if refunded_today_pkr + allowed > cfg.auto_refunds_per_day_pkr:
         cap_reason = f"automatic refunds today would exceed {cfg.auto_refunds_per_day_pkr}"
-        return RefundDecision(
-            tier="manager", allowed_amount=allowed, reasons=why + [cap_reason], policy_refs=_unique(refs + [REF_LIMITS])
-        )
+        return _decide("manager", allowed, why + [cap_reason], refs)
 
-    return RefundDecision(
-        tier="auto",
-        allowed_amount=allowed,
-        reasons=why + ["within automatic policy"],
-        policy_refs=_unique(refs + [REF_LIMITS]),
-    )
+    return _decide("auto", allowed, why + ["within automatic policy"], refs)

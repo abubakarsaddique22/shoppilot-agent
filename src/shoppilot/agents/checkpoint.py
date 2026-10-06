@@ -69,7 +69,7 @@ def close_checkpointer(saver: PostgresSaver) -> None:
     _pool(saver).close()
 
 
-# ------------------------------------------------------------------------------------------------ read the state
+# -------------------------------------- read the state
 class TicketSnapshot(BaseModel):
     """What the UI may know about a ticket's run. Small and safe: no messages, no customer text."""
 

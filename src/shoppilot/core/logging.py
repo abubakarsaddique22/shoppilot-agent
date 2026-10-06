@@ -1,21 +1,15 @@
-"""Central logging setup (write once, use everywhere).
+"""Logging setup. Call setup_logging() once at app start.
 
-Teen jagah log likhta hai:
-  * console          -> development mein terminal par readable lines
-  * logs/app.log     -> HAR log (INFO+), JSON lines, machine-readable
-  * logs/error.log   -> sirf ERROR / CRITICAL + poora traceback, insaan ke parhne layak
+Files:
+  logs/app.log    every log (INFO+), one JSON object per line
+  logs/error.log  only ERROR/CRITICAL, with the full traceback
+  console         short readable lines (development)
 
-Har line mein request_id / ticket_id / thread_id aati hai (contextvars se).
-Emails aur secrets (api key, token, password, Bearer ...) automatically mask hote hain.
+Every line has request_id, ticket_id and thread_id. Emails and secrets are masked.
 
-Use:
-    from shoppilot.core.logging import setup_logging, get_logger, bind_context
-    setup_logging()                       # app start par EK baar
     log = get_logger(__name__)
     with bind_context(ticket_id="T-1042"):
         log.info("refund proposed", extra={"amount_pkr": 5400})
-    try: ...
-    except Exception: log.exception("refund failed")   # traceback error.log mein jayega
 """
 from __future__ import annotations
 
@@ -24,7 +18,6 @@ import logging
 import logging.handlers
 import re
 import sys
-import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -32,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-# ---------------------------------------------------------------- context ---
+# ---- context ids ----
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 ticket_id_var: ContextVar[str] = ContextVar("ticket_id", default="-")
 thread_id_var: ContextVar[str] = ContextVar("thread_id", default="-")
@@ -41,7 +34,7 @@ _CTX_VARS = {"request_id": request_id_var, "ticket_id": ticket_id_var, "thread_i
 
 @contextmanager
 def bind_context(**values: str) -> Iterator[None]:
-    """Temporarily set request_id / ticket_id / thread_id for all logs inside the block."""
+    """Set request_id / ticket_id / thread_id for all logs inside the block."""
     tokens = [(_CTX_VARS[k], _CTX_VARS[k].set(str(v))) for k, v in values.items() if k in _CTX_VARS]
     try:
         yield
@@ -50,34 +43,22 @@ def bind_context(**values: str) -> Iterator[None]:
             var.reset(token)
 
 
-# ---------------------------------------------------------------- masking ---
+# ---- masking ----
 _EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
-_SECRET_RE = re.compile(
-    r"(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)[\"']?\s*[:=]\s*[\"']?)([^\s\"',}]+)"
-)
+_SECRET_RE = re.compile(r"(?i)((?:api[_-]?key|secret|token|password|authorization)[\"']?\s*[:=]\s*[\"']?)([^\s\"',}]+)")
 
 
 def mask(text: str) -> str:
-    """a***@gmail.com ; api_key=*** ; Bearer ***"""
+    """a***@gmail.com, api_key=***, Bearer ***"""
     text = _EMAIL_RE.sub(r"\1***@\2", text)
     text = _BEARER_RE.sub(r"\1***", text)
     return _SECRET_RE.sub(r"\1***", text)
 
 
-def _mask_value(v: Any) -> Any:
-    if isinstance(v, str):
-        return mask(v)
-    if isinstance(v, dict):
-        return {k: ("***" if re.search(r"(?i)key|secret|token|password", str(k)) else _mask_value(x)) for k, x in v.items()}
-    if isinstance(v, (list, tuple)):
-        return [_mask_value(x) for x in v]
-    return v
-
-
-# ---------------------------------------------------------------- filters ---
+# ---- handlers' helpers ----
 class ContextFilter(logging.Filter):
-    """Adds request_id/ticket_id/thread_id and masks the message."""
+    """Adds the context ids to the record and masks the message."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         for name, var in _CTX_VARS.items():
@@ -89,23 +70,10 @@ class ContextFilter(logging.Filter):
         return True
 
 
-_STD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
-    "message", "asctime", "request_id", "ticket_id", "thread_id", "_masked", "taskName",
-}
+_STANDARD = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | set(_CTX_VARS) | {"message", "asctime", "_masked", "taskName"}
 
 
-def _extras(record: logging.LogRecord) -> dict[str, Any]:
-    return {k: _mask_value(v) for k, v in record.__dict__.items() if k not in _STD_ATTRS}
-
-
-def _format_exc(record: logging.LogRecord) -> str:
-    return mask(logging.Formatter().formatException(record.exc_info)) if record.exc_info else ""
-
-
-# ------------------------------------------------------------- formatters ---
 class JsonFormatter(logging.Formatter):
-    """One JSON object per line -> logs/app.log."""
-
     def format(self, record: logging.LogRecord) -> str:
         data: dict[str, Any] = {
             "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
@@ -117,71 +85,26 @@ class JsonFormatter(logging.Formatter):
             "thread_id": getattr(record, "thread_id", "-"),
             "where": f"{record.module}.{record.funcName}:{record.lineno}",
         }
-        if extra := _extras(record):
-            data["extra"] = extra
+        if extra := {k: v for k, v in record.__dict__.items() if k not in _STANDARD}:
+            data["extra"] = json.loads(mask(json.dumps(extra, default=str)))
         if record.exc_info and record.exc_info[0]:
             data["exception"] = {
                 "type": record.exc_info[0].__name__,
                 "message": mask(str(record.exc_info[1])),
-                "traceback": _format_exc(record),
+                "traceback": mask(self.formatException(record.exc_info)),
             }
         return json.dumps(data, ensure_ascii=False, default=str)
 
 
-class ErrorBlockFormatter(logging.Formatter):
-    """Readable multi-line block -> logs/error.log. Yahan dekho: error kya hai, kahan hua, traceback."""
+class MaskedFormatter(logging.Formatter):
+    """Plain text formatter that also masks the traceback."""
 
-    def format(self, record: logging.LogRecord) -> str:
-        ts = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
-        lines = [
-            "=" * 78,
-            f"TIME      : {ts}",
-            f"LEVEL     : {record.levelname}",
-            f"LOGGER    : {record.name}  ({record.module}.{record.funcName}:{record.lineno})",
-            f"REQUEST   : {getattr(record, 'request_id', '-')}   TICKET: {getattr(record, 'ticket_id', '-')}"
-            f"   THREAD: {getattr(record, 'thread_id', '-')}",
-            f"MESSAGE   : {record.getMessage()}",
-        ]
-        if extra := _extras(record):
-            lines.append(f"DETAILS   : {json.dumps(extra, ensure_ascii=False, default=str)}")
-        if record.exc_info and record.exc_info[0]:
-            lines.append(f"EXCEPTION : {record.exc_info[0].__name__}: {mask(str(record.exc_info[1]))}")
-            lines.append("TRACEBACK :")
-            lines.append(_format_exc(record))
-        lines.append("")
-        return "\n".join(lines)
+    def formatException(self, ei: Any) -> str:  # noqa: N802
+        return mask(super().formatException(ei))
 
 
-class ConsoleFormatter(logging.Formatter):
-    _COLORS = {"DEBUG": "\033[36m", "INFO": "\033[32m", "WARNING": "\033[33m", "ERROR": "\033[31m", "CRITICAL": "\033[41m"}
-
-    def __init__(self, color: bool) -> None:
-        super().__init__()
-        self.color = color
-
-    def format(self, record: logging.LogRecord) -> str:
-        ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
-        lvl = f"{record.levelname:<8}"
-        if self.color:
-            lvl = f"{self._COLORS.get(record.levelname, '')}{lvl}\033[0m"
-        ctx = " ".join(
-            f"{k}={getattr(record, k)}" for k in ("request_id", "ticket_id") if getattr(record, k, "-") != "-"
-        )
-        line = f"{ts} {lvl} {record.name}: {record.getMessage()}" + (f"  [{ctx}]" if ctx else "")
-        if extra := _extras(record):
-            line += f"  {extra}"
-        if record.exc_info and record.exc_info[0]:
-            line += "\n" + _format_exc(record)
-        return line
-
-
-# ------------------------------------------------------------------ setup ---
-_CONFIGURED = False
-
-
+# ---- setup ----
 def setup_logging(level: str = "INFO", log_dir: str | Path = "logs", console: bool = True) -> Path:
-    """Call ONCE at app start. Safe to call again (it resets handlers). Returns the log directory."""
-    global _CONFIGURED
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
 
@@ -191,27 +114,24 @@ def setup_logging(level: str = "INFO", log_dir: str | Path = "logs", console: bo
         root.removeHandler(h)
         h.close()
 
-    ctx_filter = ContextFilter()
+    app_file = logging.handlers.RotatingFileHandler(log_path / "app.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8")
+    app_file.setFormatter(JsonFormatter())
 
-    app_h = logging.handlers.RotatingFileHandler(log_path / "app.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8")
-    app_h.setLevel(level.upper())
-    app_h.setFormatter(JsonFormatter())
+    error_file = logging.handlers.RotatingFileHandler(log_path / "error.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    error_file.setLevel(logging.ERROR)
+    error_file.setFormatter(MaskedFormatter("%(asctime)s %(levelname)s %(name)s [req=%(request_id)s ticket=%(ticket_id)s]: %(message)s"))
 
-    err_h = logging.handlers.RotatingFileHandler(log_path / "error.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8")
-    err_h.setLevel(logging.ERROR)
-    err_h.setFormatter(ErrorBlockFormatter())
-
-    handlers: list[logging.Handler] = [app_h, err_h]
+    handlers: list[logging.Handler] = [app_file, error_file]
     if console:
-        con_h = logging.StreamHandler(sys.stderr)
-        con_h.setFormatter(ConsoleFormatter(color=sys.stderr.isatty()))
-        handlers.append(con_h)
+        screen = logging.StreamHandler(sys.stderr)
+        screen.setFormatter(MaskedFormatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S"))
+        handlers.append(screen)
 
     for h in handlers:
-        h.addFilter(ctx_filter)
+        h.addFilter(ContextFilter())
         root.addHandler(h)
 
-    # uvicorn ki apni handlers hata do, root ke through jaye (taake file mein bhi aaye)
+    # uvicorn logs go through the root logger, so they reach the files too
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         lg = logging.getLogger(name)
         lg.handlers.clear()
@@ -219,32 +139,7 @@ def setup_logging(level: str = "INFO", log_dir: str | Path = "logs", console: bo
     for noisy in ("httpx", "httpcore", "urllib3", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    _install_excepthooks()
-    _CONFIGURED = True
-    logging.getLogger(__name__).info("logging ready", extra={"log_dir": str(log_path.resolve()), "level": level.upper()})
     return log_path
-
-
-def _install_excepthooks() -> None:
-    """Jo exception kahin catch nahi hui wo bhi error.log mein jaye (crash se pehle)."""
-    log = logging.getLogger("shoppilot.uncaught")
-
-    def _sys_hook(exc_type, exc, tb):  # type: ignore[no-untyped-def]
-        if issubclass(exc_type, KeyboardInterrupt):
-            sys.__excepthook__(exc_type, exc, tb)
-            return
-        log.critical("uncaught exception", exc_info=(exc_type, exc, tb))
-
-    def _thread_hook(args: threading.ExceptHookArgs) -> None:
-        if args.exc_value is None:
-            return
-        log.critical(
-            "uncaught exception in thread %s", getattr(args.thread, "name", "?"),
-            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
-        )
-
-    sys.excepthook = _sys_hook
-    threading.excepthook = _thread_hook
 
 
 def get_logger(name: str | None = None) -> logging.Logger:

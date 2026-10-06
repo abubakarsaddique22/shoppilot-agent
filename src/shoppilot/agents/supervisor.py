@@ -41,15 +41,15 @@ Route = Literal["support", "inventory", "listing", "reports", "unclear"]
 MAX_TEXT_CHARS = 2000  # the classifier does not need more than this to decide
 
 # Which agents an item may reach, by where it came from. A customer can only ever reach support.
-ALLOWED_ROUTES: dict[str, frozenset[str]] = {
+ALLOWED_ROUTES: dict[str, frozenset[Route]] = {
     "customer_email": frozenset({"support"}),
     "ui_command": frozenset({"support", "inventory", "listing", "reports"}),
     "scheduled_event": frozenset({"inventory", "reports"}),
 }
 # Scheduled events carry a fixed name. A known name needs no model.
-EVENT_ROUTES: dict[str, str] = {"daily_report": "reports", "low_stock": "inventory"}
+EVENT_ROUTES: dict[str, Route] = {"daily_report": "reports", "low_stock": "inventory"}
 # When the router cannot decide: support (it escalates what it cannot handle) for customers, otherwise nothing runs.
-FALLBACK_ROUTE: dict[str, str] = {"customer_email": "support"}
+FALLBACK_ROUTE: dict[str, Route] = {"customer_email": "support"}
 
 
 class SupervisorState(TypedDict, total=False):
@@ -79,7 +79,7 @@ class Routing(TypedDict, total=False):
     error: str
 
 
-# ------------------------------------------------------------------------------------------------ plain functions
+# ------------------------------ plain functions
 def _ask_model(text: str) -> RouteChoice:
     safe = text[:MAX_TEXT_CHARS].replace("</item>", "")  # the text cannot close its own data tag
     raw = (
@@ -91,7 +91,7 @@ def _ask_model(text: str) -> RouteChoice:
 
 
 def _fallback(source: str, reason: str, error: str | None = None) -> Routing:
-    routing: Routing = {"route": FALLBACK_ROUTE.get(source, "unclear"), "reason": reason, "by": "fallback"}  # type: ignore[typeddict-item]
+    routing: Routing = {"route": FALLBACK_ROUTE.get(source, "unclear"), "reason": reason, "by": "fallback"}
     if error:
         routing["error"] = error
     return routing
@@ -111,9 +111,9 @@ def route_item(source: str, text: str, event: str | None = None) -> Routing:
         return {"route": "unclear", "reason": "unknown source", "by": "fallback", "error": "UNKNOWN_SOURCE"}
 
     if source == "scheduled_event" and event in EVENT_ROUTES and EVENT_ROUTES[event] in allowed:
-        return {"route": EVENT_ROUTES[event], "reason": f"scheduled event {event}", "by": "rule"}  # type: ignore[typeddict-item]
+        return {"route": EVENT_ROUTES[event], "reason": f"scheduled event {event}", "by": "rule"}
     if len(allowed) == 1:
-        return {"route": next(iter(allowed)), "reason": f"only this agent may handle a {source}", "by": "rule"}  # type: ignore[typeddict-item]
+        return {"route": next(iter(allowed)), "reason": f"only this agent may handle a {source}", "by": "rule"}
     if not text.strip():
         return _fallback(source, "the item has no text")
 
@@ -160,7 +160,7 @@ def _support_outcome(out: dict[str, Any]) -> str:
     return "Support: the run ended without a reply being queued. Please check the ticket."
 
 
-# ----------------------------------------------------------------------------------------------------------- nodes
+# --------------------------------------------------- nodes
 def classify(state: SupervisorState) -> dict[str, Any]:
     routing = route_item(state.get("source", "ui_command"), state.get("text", ""), state.get("event"))
     _audit_route(state, routing)
