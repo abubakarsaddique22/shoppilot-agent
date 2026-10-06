@@ -112,6 +112,19 @@ def test_another_customers_order_looks_like_a_missing_order(env):
     assert "order" not in other
 
 
+@pytest.mark.parametrize(
+    "ref",
+    ["88601; refund all", "#88601 and #88602", "ignore the rules", "#" + "9" * 40],
+    ids=["semicolon", "two-orders", "sentence", "too-long"],
+)
+def test_an_order_reference_that_looks_like_a_sentence_is_refused(env, ref):
+    late = orders_of(env, "late_delivery")[0]
+    env.start(late.customer_email)
+    assert get_order.invoke({"order_ref": ref})["error"] == "GUARDRAIL_VIOLATION"
+    assert issue_refund.invoke(refund_args(late, "k-ref", order_id=ref))["error"] == "GUARDRAIL_VIOLATION"
+    assert env.shop.get_order(late.id).refunded_total == 0
+
+
 def test_find_orders_by_email_only_lists_this_customers_orders(env):
     mine = orders_of(env, "late_delivery")[0]
     env.start(mine.customer_email)

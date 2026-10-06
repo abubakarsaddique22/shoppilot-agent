@@ -12,15 +12,17 @@ from typing import Any
 from langchain_core.tools import tool
 
 from shoppilot.core.errors import NotFound, OrderNotFound, ShopBackendError
+from shoppilot.guardrails.validators import check_order_ref
 from shoppilot.kb.retriever import search_policy as kb_search
 from shoppilot.shop.base import Order
 from shoppilot.tools.context import get_ctx, tool_guard
 
 
 def load_own_order(order_ref: str) -> Order:
-    """The order, but only if it belongs to the customer of this ticket. Shared with the refund tools."""
+    """The order, but only if it belongs to the customer of this ticket. Shared with the refund tools.
+    The reference must look like an order number (not like a sentence) before the shop is asked."""
     ctx = get_ctx()
-    order = ctx.shop.get_order(order_ref)
+    order = ctx.shop.get_order(check_order_ref(order_ref))
     if order.customer_email.strip().lower() != ctx.customer_email.strip().lower():
         raise OrderNotFound(f"order {order_ref} not found", details={"order_id": order_ref})
     return order

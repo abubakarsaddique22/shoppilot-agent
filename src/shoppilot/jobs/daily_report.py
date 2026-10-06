@@ -26,6 +26,7 @@ from shoppilot.core.config import settings
 from shoppilot.core.logging import get_logger
 from shoppilot.db.models import MessageRow, ReportRunRow, TicketRow, utcnow
 from shoppilot.db.session import make_engine, make_session_factory
+from shoppilot.shop.base import ShopBackend
 from shoppilot.shop.mockshop import MockShop
 from shoppilot.tools.context import RunContext, audit, ctx_var
 
@@ -107,7 +108,7 @@ def queue_owner_email(sf: sessionmaker[Session], thread_id: str, summary: str, a
 # ------------------------------------------------------------------------------------------------ the job
 def run_daily_report(
     sf: sessionmaker[Session] | None = None,
-    shop: MockShop | None = None,
+    shop: ShopBackend | None = None,
     now: Callable[[], datetime] = utcnow,
 ) -> dict[str, Any]:
     """Make today's report once. Returns {"status": "done" | "skipped", "location": ..., "outcome": ...}."""

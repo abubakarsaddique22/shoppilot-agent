@@ -1,8 +1,9 @@
 """Customer email and escalation tools (Step I).
 
 send_customer_email: the recipient is always the customer of the ticket (never an argument). The text comes from a
-fixed template plus short fields; fields may not contain email addresses or links. For now the email is saved as an
-outbound message on the ticket (the UI shows it); sending it through SMTP or SES is added with the scheduled jobs (Step P).
+fixed template plus short fields; fields may not contain email addresses or links (guardrails.validators). For now the
+email is saved as an outbound message on the ticket (the UI shows it); sending it through SMTP or SES is added with the
+scheduled jobs (Step P).
 escalate_to_human: the safe exit. No budget, no role check, always allowed.
 """
 from string import Formatter
@@ -12,12 +13,12 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from shoppilot.core.errors import BudgetExceeded, GuardrailViolation, ValidationFailed
+from shoppilot.core.errors import BudgetExceeded, ValidationFailed
 from shoppilot.db.models import MessageRow, TicketRow
+from shoppilot.guardrails.validators import MAX_FIELD_CHARS, check_plain_fields
 from shoppilot.tools.context import audit, find_action, get_ctx, record_action, tool_guard
 
 MAX_EMAILS_PER_TICKET = 3
-MAX_FIELD_CHARS = 600
 
 TEMPLATES = {
     "status_update": "Hello,\n\nHere is the latest on your order {order_id}: {details}\n\nRegards,\nShopPilot support",
@@ -71,11 +72,7 @@ def send_customer_email(template: str, idempotency_key: str, fields: dict[str, s
     needed = _placeholders(text)
     if needed - set(values):
         raise ValidationFailed(f"missing fields for template {template}: {sorted(needed - set(values))}")
-    for name, value in values.items():
-        if len(value) > MAX_FIELD_CHARS:
-            raise ValidationFailed(f"field {name} is longer than {MAX_FIELD_CHARS} characters")
-        if "@" in value or "http" in value.lower():
-            raise GuardrailViolation(f"field {name} may not contain an email address or a link")
+    check_plain_fields(values, max_chars=MAX_FIELD_CHARS)
 
     body = text.format_map({name: values[name] for name in needed})
     with ctx.session_factory() as session:

@@ -10,7 +10,6 @@ Only triage, decide and reply call the model. Everything else is plain code.
 The model proposes, the policy engine decides (rules node), a human approves money (approval_gate).
 """
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -26,6 +25,8 @@ from shoppilot.core.errors import AppError
 from shoppilot.core.llm import get_llm
 from shoppilot.core.logging import get_logger
 from shoppilot.core.prompts import load_prompt
+from shoppilot.guardrails.sanitize import injection_flags, remove_delimiters, wrap_untrusted
+from shoppilot.guardrails.validators import contains_link_or_address, reply_text_problem
 from shoppilot.tools.context import audit, get_ctx
 from shoppilot.tools.email import escalate_to_human, send_customer_email
 from shoppilot.tools.orders import get_order, load_own_order, search_policy, track_shipment
@@ -59,12 +60,14 @@ def triage(state: TicketState) -> dict[str, Any]:
     if not text:
         return {"intent": "other", "order_ref": None}
 
-    safe_text = text.replace("</customer_message>", "")  # the customer cannot close the data tag early
+    flags = injection_flags(text)
+    if flags:
+        audit("suspicious_text", flags=flags)  # a signal for the audit log only: the real defence is the code after the model
     try:
         raw = get_llm().with_structured_output(Triage).invoke(
             [
                 SystemMessage(load_prompt("triage")["system"]),
-                HumanMessage(f"<customer_message>\n{safe_text}\n</customer_message>"),
+                HumanMessage(wrap_untrusted(text)),  # cleaned, and the customer cannot close the data tag
             ]
         )
         result = Triage.model_validate(raw)  # the answer may come back as a dict or as the model itself
@@ -176,13 +179,10 @@ def check_decision(decision: Decision, state: TicketState) -> str | None:
 
 
 def _decide_input(state: TicketState) -> str:
-    def clean(text: str) -> str:
-        return text.replace("</customer_message>", "").replace("</facts>", "")  # data cannot close its own tag
-
-    facts = clean(json.dumps(state.get("facts", []), ensure_ascii=False))
+    facts = remove_delimiters(json.dumps(state.get("facts", []), ensure_ascii=False))  # data cannot close its own tag
     return (
         f"Intent: {state.get('intent', 'other')}\n"
-        f"<customer_message>\n{clean(last_customer_text(state))}\n</customer_message>\n"
+        f"{wrap_untrusted(last_customer_text(state))}\n"
         f"<facts>\n{facts}\n</facts>"
     )
 
@@ -488,14 +488,6 @@ def escalate(state: TicketState) -> dict[str, Any]:
 MAX_DETAILS_CHARS = 500
 ESCALATED_DETAILS = "Thank you for your message. A member of our team will look at it and reply to you soon."
 GENERAL_FALLBACK = "Thank you for your message. Our team will review it and get back to you."
-# Text written by the model must not contain an address or link, or a sign that money moved.
-UNSAFE_TEXT = re.compile(r"@|https?:|www\.", re.IGNORECASE)
-MONEY_DONE = re.compile(
-    r"\b(refunded|credited|reimbursed|issued|processed|approved)\b"
-    r"|\brefund\s+(has|have|was)\b"
-    r"|\brefund\s+(ho\s+gaya|ho\s+chuka|kar\s+di)",
-    re.IGNORECASE,
-)
 
 
 class ReplyDetails(BaseModel):
@@ -522,7 +514,7 @@ def _policy_ref(state: TicketState) -> str:
         f["data"]["section"] for f in state.get("facts", []) if f.get("source") == "search_policy"
     ]
     text = _one_line(", ".join(str(r) for r in refs[:2]), 200)
-    return text if text and not UNSAFE_TEXT.search(text) else "our returns policy"
+    return text if text and not contains_link_or_address(text) else "our returns policy"
 
 
 def _status_fallback(state: TicketState) -> str:
@@ -577,19 +569,12 @@ def _reply_plan(state: TicketState) -> ReplyPlan:
 
 
 def _reply_input(state: TicketState, outcome: str) -> str:
-    def clean(text: str) -> str:
-        return text.replace("</customer_message>", "").replace("</facts>", "").replace("</outcome>", "")
-
-    facts = clean(json.dumps(state.get("facts", []), ensure_ascii=False))
+    facts = remove_delimiters(json.dumps(state.get("facts", []), ensure_ascii=False))
     return (
-        f"<outcome>\n{clean(outcome)}\n</outcome>\n"
-        f"<customer_message>\n{clean(last_customer_text(state))}\n</customer_message>\n"
+        f"{wrap_untrusted(outcome, 'outcome')}\n"
+        f"{wrap_untrusted(last_customer_text(state))}\n"
         f"<facts>\n{facts}\n</facts>"
     )
-
-
-def _details_ok(text: str) -> bool:
-    return bool(text) and len(text) <= MAX_DETAILS_CHARS and not UNSAFE_TEXT.search(text) and not MONEY_DONE.search(text)
 
 
 def _write_details(state: TicketState, plan: ReplyPlan) -> str:
@@ -609,8 +594,8 @@ def _write_details(state: TicketState, plan: ReplyPlan) -> str:
     except Exception:  # malformed answer, rate limit, outage, missing model setting
         log.warning("reply: the model answer was malformed or missing, using the fixed text", exc_info=True)
         return plan.fallback
-    if not _details_ok(text):
-        log.warning("reply: the model text broke a rule, using the fixed text")
+    if problem := reply_text_problem(text, max_chars=MAX_DETAILS_CHARS):
+        log.warning("reply: the model text broke a rule (%s), using the fixed text", problem)
         return plan.fallback
     return text
 
