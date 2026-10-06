@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import time
 import uuid
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from shoppilot.agents.checkpoint import close_checkpointer, open_checkpointer
@@ -95,3 +97,20 @@ if settings.env == "dev":  # sirf logging/error test karne ke liye
     @app.get("/v1/debug/boom")
     async def debug_boom() -> None:
         return 1 / 0  # type: ignore[return-value]
+
+
+# Local dev: Caddy ke bagair UI chalane ke liye. Production mein Caddy yehi kaam karta hai
+# (ui/ serve karna aur /api hata kar API ko bhejna), is liye ye sirf dev mein hai.
+UI_DIR = Path(__file__).resolve().parents[3] / "ui"
+
+if settings.env == "dev" and UI_DIR.is_dir():
+
+    @app.middleware("http")
+    async def strip_api_prefix(request: Request, call_next):
+        path = request.scope["path"]
+        if path.startswith("/api/"):
+            request.scope["path"] = path[4:]  # /api/v1/tickets -> /v1/tickets
+        return await call_next(request)
+
+    # Sab routes ke BAAD mount hona zaroori hai, warna ye unhe dhak lega.
+    app.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")
