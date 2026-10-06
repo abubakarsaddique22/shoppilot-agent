@@ -24,4 +24,6 @@ logs/*.log.*
 !logs/.gitkeep
 data/eval/results/*
 !data/eval/results/.gitkeep
+# local daily reports (Step P, when no S3 bucket is set)
+reports/
 .DS_Store

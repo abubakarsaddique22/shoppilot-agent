@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     kb_min_score: float = 0.60
     embedding_model: str = "BAAI/bge-small-en-v1.5"  # fastembed model, 384 numbers per text; must match EMBEDDING_DIM in db/models.py
     s3_bucket: str = ""
+    owner_email: str = ""                # the daily report is queued for this address (fake address in dev)
 
     langsmith_tracing: bool = False
     langsmith_project: str = "shoppilot-dev"

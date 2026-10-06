@@ -6,7 +6,7 @@ Amounts are whole PKR. Datetimes are naive UTC.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -113,6 +113,24 @@ class PurchaseOrderDraft(BaseModel):
     created_at: datetime
 
 
+class LowStockItem(BaseModel):
+    sku: str
+    on_hand: int
+    reorder_point: int
+
+
+class SalesSummary(BaseModel):
+    """Numbers of one day for the daily report. Aggregates only: no customer rows."""
+
+    day: date
+    orders_count: int  # orders placed that day, cancelled ones not counted
+    sales_pkr: int
+    refunds_count: int  # successful refunds made that day
+    refunds_pkr: int
+    late_orders: int  # orders still on the way after their estimated delivery date (now, not that day)
+    low_stock: list[LowStockItem] = Field(default_factory=list)  # on hand at or below the reorder point (now)
+
+
 @runtime_checkable
 class ShopBackend(Protocol):
     def get_order(self, order_id: str) -> Order: ...
@@ -134,3 +152,5 @@ class ShopBackend(Protocol):
     def create_product_draft(self, fields: dict[str, Any]) -> ProductDraft: ...
 
     def create_purchase_order_draft(self, sku: str, qty: int, supplier: str) -> PurchaseOrderDraft: ...
+
+    def sales_summary(self, day: date) -> SalesSummary: ...

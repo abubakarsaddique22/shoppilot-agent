@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from shoppilot.agents.inventory import build_inventory_graph
 from shoppilot.agents.listing import build_listing_graph
+from shoppilot.agents.reports import build_reports_graph
 from shoppilot.agents.state import Route, SupervisorState
 from shoppilot.agents.support import build_support_graph
 from shoppilot.core.llm import get_llm
@@ -173,14 +174,6 @@ def unclear(state: SupervisorState) -> dict[str, Any]:
     return {"outcome": outcome}
 
 
-def run_reports(state: SupervisorState) -> dict[str, Any]:
-    """The Reports agent is built in Step P. Until then the router says so honestly and does nothing."""
-    return {
-        "outcome": "The Reports agent is not built yet (Step P). Nothing was run.",
-        "errors": [*state.get("errors", []), "REPORTS_NOT_BUILT"],
-    }
-
-
 def after_classify(state: SupervisorState) -> Literal["run_support", "run_inventory", "run_listing", "run_reports", "unclear"]:
     route = state.get("route")
     if route == "support":
@@ -204,6 +197,7 @@ def build_supervisor_graph(checkpointer: Any = None) -> Any:
     support = build_support_graph()
     inventory = build_inventory_graph()
     listing = build_listing_graph()
+    reports = build_reports_graph()
 
     def ticket_of(state: SupervisorState) -> str:
         return state.get("ticket_id") or get_ctx().ticket_id
@@ -228,6 +222,14 @@ def build_supervisor_graph(checkpointer: Any = None) -> Any:
             out = listing.invoke({"ticket_id": ticket_of(state), "request": state.get("text", "")}, config)
         return {
             "outcome": out.get("outcome", "Listing: nothing to do."),
+            "errors": [*state.get("errors", []), *out.get("errors", [])],
+        }
+
+    def run_reports(state: SupervisorState, config: RunnableConfig) -> dict[str, Any]:
+        with acting_as("reports"):
+            out = reports.invoke({"ticket_id": ticket_of(state), "request": state.get("text", "")}, config)
+        return {
+            "outcome": out.get("outcome", "Reports: nothing to do."),
             "errors": [*state.get("errors", []), *out.get("errors", [])],
         }
 

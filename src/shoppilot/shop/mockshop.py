@@ -14,7 +14,7 @@ Mapping notes (the real ShopifyBackend must return the same values):
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -26,12 +26,14 @@ from shoppilot.core.errors import IdempotencyConflict, NotFound, OrderNotFound, 
 from shoppilot.shop.base import (
     Customer,
     InventoryLevel,
+    LowStockItem,
     Order,
     OrderItem,
     Product,
     ProductDraft,
     PurchaseOrderDraft,
     Refund,
+    SalesSummary,
     Shipment,
 )
 from shoppilot.shop.mock_models import (
@@ -265,6 +267,53 @@ class MockShop:
             return PurchaseOrderDraft(
                 id=row.id, sku=row.sku, qty=row.qty, supplier=row.supplier, status=row.status, created_at=row.created_at
             )
+
+    # ----------------------------------------------------------------- reports
+    def sales_summary(self, day: date) -> SalesSummary:
+        """The numbers of one day. orders and refunds are of that day; late orders and low stock are as of now."""
+        start = datetime.combine(day, datetime.min.time())
+        end = start + timedelta(days=1)
+        with self._sf() as s:
+            orders_count, sales = s.execute(
+                select(func.count(OrderRow.id), func.coalesce(func.sum(OrderRow.total_price), 0)).where(
+                    OrderRow.created_at >= start, OrderRow.created_at < end, OrderRow.cancelled_at.is_(None)
+                )
+            ).one()
+            refunds_count, refunds = s.execute(
+                select(func.count(TransactionRow.id), func.coalesce(func.sum(TransactionRow.amount), 0)).where(
+                    TransactionRow.kind == "refund",
+                    TransactionRow.status == "success",
+                    TransactionRow.created_at >= start,
+                    TransactionRow.created_at < end,
+                )
+            ).one()
+            late_orders = s.scalar(
+                select(func.count(func.distinct(OrderRow.id)))
+                .select_from(OrderRow)
+                .join(FulfillmentRow, FulfillmentRow.order_id == OrderRow.id)
+                .where(
+                    OrderRow.cancelled_at.is_(None),
+                    OrderRow.financial_status != "refunded",
+                    FulfillmentRow.status == "success",
+                    FulfillmentRow.delivered_at.is_(None),
+                    FulfillmentRow.estimated_delivery_at < self._now(),
+                )
+            )
+            low = s.execute(
+                select(VariantRow.sku, InventoryLevelRow.available, InventoryLevelRow.reorder_point)
+                .join(InventoryLevelRow, InventoryLevelRow.inventory_item_id == VariantRow.inventory_item_id)
+                .where(InventoryLevelRow.available <= InventoryLevelRow.reorder_point)
+                .order_by(VariantRow.sku)
+            ).all()
+        return SalesSummary(
+            day=day,
+            orders_count=int(orders_count),
+            sales_pkr=_pkr(Decimal(sales or 0)),
+            refunds_count=int(refunds_count),
+            refunds_pkr=_pkr(Decimal(refunds or 0)),
+            late_orders=int(late_orders or 0),
+            low_stock=[LowStockItem(sku=sku, on_hand=on_hand, reorder_point=point) for sku, on_hand, point in low],
+        )
 
     # ---------------------------------------------------------------- helpers
     @staticmethod

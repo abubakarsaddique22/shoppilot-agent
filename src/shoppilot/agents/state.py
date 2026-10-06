@@ -6,7 +6,8 @@ merges the result in. The Postgres checkpointer saves it after every node.
     TicketState      support graph
     InventoryState   inventory graph
     ListingState     listing graph
-    SupervisorState  the router in front of the three graphs
+    ReportState      reports graph
+    SupervisorState  the router in front of the four graphs
 
 What goes in a state: small, plain data (dicts, strings, numbers) that later nodes need.
 What does NOT go in a state:
@@ -67,6 +68,17 @@ class ListingState(TypedDict, total=False):
     draft_fields: dict[str, Any]  # what the model wrote and the code accepted
     draft: dict[str, Any]  # what the tool saved
     outcome: str
+    errors: list[str]
+
+
+class ReportState(TypedDict, total=False):
+    ticket_id: str
+    request: str  # not used for the daily report; kept so every agent is called the same way
+    numbers: dict[str, Any]  # the day's numbers from sales_summary
+    summary: str  # written by the model, or by code when the model fails
+    actions: list[str]  # up to 3 recommended actions
+    location: str  # where the HTML report was saved (S3 or a local file)
+    outcome: str  # the sentence shown to the staff member
     errors: list[str]
 
 
