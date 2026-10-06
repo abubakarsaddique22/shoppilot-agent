@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""               # Groq key
     google_api_key: str = ""            # Gemini key (Google AI Studio)
     jwt_secret: str = "dev-only-change-me"
+    webhook_secret: str = ""            # shared secret of POST /v1/webhooks/email (header X-Webhook-Secret). Empty = webhook refuses everything
 
     auto_refund_limit_pkr: int = 3000
     manager_limit_pkr: int = 15000

@@ -1,4 +1,16 @@
-"""FastAPI entrypoint (minimal): logging + request_id middleware + error handlers + health. Baqi routers baad mein."""
+"""FastAPI entrypoint (Step Q): logging, request_id middleware, error handlers, and every router under /v1.
+
+What the lifespan puts on `app.state` (the dependencies in api/deps.py read it from there):
+
+    session_factory  the application database (tickets, approvals, audit ...)
+    shop             the store backend. MockShop for now; the Shopify backend plugs in here later
+    limits           refund limits from configs/settings.dev.yaml
+    checkpointer     the Postgres saver (Step N)
+    graph            the compiled SUPERVISOR graph (it runs the support, inventory, listing and reports graphs)
+
+If the database is down the API still starts (docs, /health), `graph` stays None and runs are refused with a clean 503.
+`/ready` then answers 503 as well, so a load balancer or Docker health check can tell.
+"""
 from __future__ import annotations
 
 import time
@@ -9,10 +21,14 @@ from fastapi import FastAPI, Request
 from starlette.concurrency import run_in_threadpool
 
 from shoppilot.agents.checkpoint import close_checkpointer, open_checkpointer
-from shoppilot.agents.support import build_support_graph
+from shoppilot.agents.supervisor import build_supervisor_graph
+from shoppilot.api.routers import ALL_ROUTERS
 from shoppilot.core.config import settings
 from shoppilot.core.errors import OrderNotFound, register_exception_handlers
 from shoppilot.core.logging import bind_context, get_logger, setup_logging
+from shoppilot.db.session import make_engine, make_session_factory
+from shoppilot.policy.limits import load_limits
+from shoppilot.shop.mockshop import MockShop
 
 log = get_logger("shoppilot.api")
 
@@ -22,14 +38,21 @@ async def lifespan(app: FastAPI):
     setup_logging(settings.log_level, settings.log_dir, settings.log_to_console)
     log.info("api starting", extra={"env": settings.env})
 
-    # Step N: the Postgres checkpointer and the support graph live for the whole life of the process.
-    # If the database is down the API still starts (health, docs), but app.state.graph stays None and runs are refused.
+    # The engine does not connect until the first query, so this never fails when the database is down.
+    engine = make_engine()
+    factory = make_session_factory(engine)
+    app.state.engine = engine
+    app.state.session_factory = factory
+    app.state.shop = MockShop(factory)  # Step E: swap for the Shopify backend here when it exists
+    app.state.limits = load_limits()
+
+    # Step N: the Postgres checkpointer and the supervisor graph live for the whole life of the process.
     app.state.checkpointer = None
     app.state.graph = None
     try:
         saver = await run_in_threadpool(open_checkpointer)  # blocking connect, so not on the event loop
         app.state.checkpointer = saver
-        app.state.graph = build_support_graph(saver)
+        app.state.graph = build_supervisor_graph(saver)
         log.info("checkpointer ready")
     except Exception:
         log.warning("checkpointer unavailable: agent runs cannot start", exc_info=True)
@@ -38,6 +61,7 @@ async def lifespan(app: FastAPI):
 
     if app.state.checkpointer is not None:
         await run_in_threadpool(close_checkpointer, app.state.checkpointer)
+    engine.dispose()
     log.info("api stopped")
 
 
@@ -58,14 +82,8 @@ async def request_context(request: Request, call_next):
     return response
 
 
-@app.get("/health")
-async def health() -> dict:
-    return {"status": "ok"}
-
-
-@app.get("/ready")
-async def ready() -> dict:
-    return {"status": "ready"}
+for _router in ALL_ROUTERS:  # /health and /ready live in routers/health.py
+    app.include_router(_router)
 
 
 if settings.env == "dev":  # sirf logging/error test karne ke liye
