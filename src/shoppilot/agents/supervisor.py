@@ -28,15 +28,14 @@ from pydantic import BaseModel, Field
 
 from shoppilot.agents.inventory import build_inventory_graph
 from shoppilot.agents.listing import build_listing_graph
-from shoppilot.agents.support import build_support_graph, load_prompt
+from shoppilot.agents.state import Route, SupervisorState
+from shoppilot.agents.support import build_support_graph
 from shoppilot.core.llm import get_llm
 from shoppilot.core.logging import get_logger
+from shoppilot.core.prompts import load_prompt
 from shoppilot.tools.context import audit, ctx_var, get_ctx
 
 log = get_logger(__name__)
-
-Source = Literal["customer_email", "ui_command", "scheduled_event"]
-Route = Literal["support", "inventory", "listing", "reports", "unclear"]
 
 MAX_TEXT_CHARS = 2000  # the classifier does not need more than this to decide
 
@@ -50,19 +49,6 @@ ALLOWED_ROUTES: dict[str, frozenset[Route]] = {
 EVENT_ROUTES: dict[str, Route] = {"daily_report": "reports", "low_stock": "inventory"}
 # When the router cannot decide: support (it escalates what it cannot handle) for customers, otherwise nothing runs.
 FALLBACK_ROUTE: dict[str, Route] = {"customer_email": "support"}
-
-
-class SupervisorState(TypedDict, total=False):
-    ticket_id: str  # the run id (also the LangGraph thread_id)
-    source: Source  # where the item came from
-    text: str  # the item text (untrusted)
-    sku: str | None  # optional, given by the UI or the scheduler; passed to the inventory agent
-    event: str | None  # name of a scheduled event, e.g. "low_stock"
-    route: Route  # set by classify
-    route_reason: str  # one line, for the audit trail and the UI
-    route_by: str  # "rule" (code decided), "model", or "fallback" (the model failed or was not allowed)
-    outcome: str  # the sentence shown to the staff member
-    errors: list[str]
 
 
 class RouteChoice(BaseModel):
@@ -79,7 +65,7 @@ class Routing(TypedDict, total=False):
     error: str
 
 
-# ------------------------------ plain functions
+# ------------------------------ helpers (not graph nodes)
 def _ask_model(text: str) -> RouteChoice:
     safe = text[:MAX_TEXT_CHARS].replace("</item>", "")  # the text cannot close its own data tag
     raw = (

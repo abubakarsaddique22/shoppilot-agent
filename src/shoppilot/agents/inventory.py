@@ -12,17 +12,18 @@
 import json
 import math
 import re
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from shoppilot.agents.support import load_prompt
+from shoppilot.agents.state import InventoryState
 from shoppilot.approvals.service import request_approval
 from shoppilot.core.config import settings
 from shoppilot.core.llm import get_llm
 from shoppilot.core.logging import get_logger
+from shoppilot.core.prompts import load_prompt
 from shoppilot.tools.context import audit, get_ctx
 from shoppilot.tools.inventory import MAX_PO_QTY, create_purchase_order_draft, get_inventory
 from shoppilot.tools.listings import get_product
@@ -34,25 +35,12 @@ MAX_QTY_FACTOR = 2  # the model may go up to twice the suggested quantity, never
 SKU_PATTERN = re.compile(r"[A-Z0-9]+(?:-[A-Z0-9]+)+", re.IGNORECASE)  # KURTA-M-BLK, EARBUDS-TWS-01
 
 
-class InventoryState(TypedDict, total=False):
-    ticket_id: str  # the run id: actions and approvals point to a row with this id
-    request: str  # what the staff member typed (untrusted text, only used to find the SKU)
-    sku: str | None  # set by the caller (scheduler) or found in the request
-    stock: dict[str, Any]
-    product: dict[str, Any]
-    proposal: dict[str, Any]
-    draft: dict[str, Any]
-    approval_id: int
-    outcome: str  # the sentence shown to the staff member
-    errors: list[str]
-
-
 class QtyProposal(BaseModel):
     qty: int = Field(gt=0, le=MAX_PO_QTY)
     reason: str = Field(default="", max_length=300)
 
 
-# ------------------------------------------------------------------------------------------------ plain functions
+# ------------------------------------------------------------------------------------------------ helpers (not graph nodes)
 def find_sku(text: str) -> str | None:
     match = SKU_PATTERN.search(text)
     return match.group(0).upper() if match else None

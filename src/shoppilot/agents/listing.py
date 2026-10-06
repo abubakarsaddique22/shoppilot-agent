@@ -12,15 +12,16 @@
 """
 import hashlib
 import re
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
-from shoppilot.agents.support import load_prompt
+from shoppilot.agents.state import ListingState
 from shoppilot.core.llm import get_llm
 from shoppilot.core.logging import get_logger
+from shoppilot.core.prompts import load_prompt
 from shoppilot.tools.listings import ProductDraftArgs, create_product_draft
 
 log = get_logger(__name__)
@@ -28,16 +29,6 @@ log = get_logger(__name__)
 MAX_ATTEMPTS = 2  # the first answer plus one retry
 MAX_REQUEST_CHARS = 3000
 UNSAFE_TEXT = re.compile(r"@|https?:|www\.|<\s*[a-z/!]", re.IGNORECASE)  # email address, link, HTML tag
-
-
-class ListingState(TypedDict, total=False):
-    ticket_id: str
-    request: str  # the product facts written by the staff member
-    idempotency_key: str
-    draft_fields: dict[str, Any]  # what the model wrote and the code accepted
-    draft: dict[str, Any]  # what the tool saved
-    outcome: str
-    errors: list[str]
 
 
 class ListingText(BaseModel):
@@ -51,7 +42,7 @@ class ListingText(BaseModel):
     vendor: str = Field(default="", max_length=60)
 
 
-# ------------------------------------------------------------------------------------------------ plain functions
+# ------------------------------------------------------------------------------------------------ helpers (not graph nodes)
 def listing_key(request: str) -> str:
     return "listing:" + hashlib.sha1(request.strip().encode()).hexdigest()[:12] + ":v1"
 

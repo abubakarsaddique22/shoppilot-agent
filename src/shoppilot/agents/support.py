@@ -1,15 +1,19 @@
-"""The support graph (Steps K and L): triage, gather_facts, decide, rules, approval_gate, execute, verify, reply, escalate.
+"""The support graph (Steps K and L).
 
-triage is the first model call of the graph. It only sorts the customer's message: which kind of request is it, and
-which order does it mention? It calls no tools. Everything after it (facts, decision, money) is decided elsewhere.
+START -> triage -> (gather_facts | escalate)
+gather_facts -> decide -> rules -> (approval_gate | reply | escalate)
+approval_gate -> (execute | reply | escalate)
+execute -> verify -> (reply | escalate)
+escalate -> reply -> END
+
+Only triage, decide and reply call the model. Everything else is plain code.
+The model proposes, the policy engine decides (rules node), a human approves money (approval_gate).
 """
 import json
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Literal
 
-import yaml
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -21,27 +25,13 @@ from shoppilot.core.config import settings
 from shoppilot.core.errors import AppError
 from shoppilot.core.llm import get_llm
 from shoppilot.core.logging import get_logger
+from shoppilot.core.prompts import load_prompt
 from shoppilot.tools.context import audit, get_ctx
 from shoppilot.tools.email import escalate_to_human, send_customer_email
 from shoppilot.tools.orders import get_order, load_own_order, search_policy, track_shipment
 from shoppilot.tools.refunds import Reason, issue_refund, propose_refund
 
 log = get_logger(__name__)
-
-# src/shoppilot/agents/support.py -> repo root is three levels up
-PROMPTS_DIR = Path(__file__).resolve().parents[3] / "configs" / "prompts"
-
-
-class Triage(BaseModel):
-    """What the model must return. A fixed schema, so it cannot answer in free text."""
-
-    intent: Intent
-    order_ref: str | None = None
-
-
-def load_prompt(name: str) -> dict[str, Any]:
-    """Read configs/prompts/<name>.yaml (keys: version, system)."""
-    return yaml.safe_load((PROMPTS_DIR / f"{name}.yaml").read_text(encoding="utf-8"))
 
 
 def last_customer_text(state: TicketState) -> str:
@@ -51,7 +41,20 @@ def last_customer_text(state: TicketState) -> str:
     return ""
 
 
+def _one_line(text: Any, limit: int) -> str:
+    return " ".join(str(text).split())[:limit]
+
+
+# --- triage ---
+class Triage(BaseModel):
+    """What the model must return for triage."""
+
+    intent: Intent
+    order_ref: str | None = None
+
+
 def triage(state: TicketState) -> dict[str, Any]:
+    """Sort the message: which intent, which order number. Calls no tools."""
     text = last_customer_text(state)
     if not text:
         return {"intent": "other", "order_ref": None}
@@ -75,7 +78,8 @@ def triage(state: TicketState) -> dict[str, Any]:
     return {"intent": result.intent, "order_ref": ref if number and number in text else None}
 
 
-# What gather_facts asks the policy knowledge base, per intent. Fixed text: the customer's words never go into the query.
+# --- gather_facts ---
+# What we ask the policy knowledge base, per intent. Fixed text: the customer's words never go into the query.
 POLICY_QUERIES: dict[str, str] = {
     "order_status": "delivery time and late deliveries",
     "refund": "refund window, late deliveries, damaged items and approval limits",
@@ -95,18 +99,9 @@ def _out_of_budget(result: dict[str, Any]) -> bool:
 
 
 def gather_facts(state: TicketState) -> dict[str, Any]:
-    """Read the facts the decision is based on. Plain code, no model (Table 12).
+    """Read the order, the shipment and the policy. Plain code. Never guesses a missing fact.
 
-    Calls get_order, then track_shipment (if the order has a tracking number), then search_policy, one after another.
-    They are not parallel on purpose: the tools read RunContext through a ContextVar and count calls in it, and
-    a new thread would not see the ContextVar. Three quick reads do not need threads.
-
-    Returns order (compact summary), facts (each with an id) and errors. It never guesses a missing fact:
-    - no order number               -> errors ["NO_ORDER_REF"]
-    - order missing or not theirs   -> errors ["ORDER_NOT_FOUND"] (the same answer in both cases, nothing leaks)
-    - read budget used up           -> the facts so far plus errors ["BUDGET_EXCEEDED"]
-    - courier does not answer       -> a tracking fact with status "unknown" (not an error)
-    - no policy similar enough      -> the other facts plus errors ["NO_POLICY_FOUND"]
+    Errors it can set: NO_ORDER_REF, ORDER_NOT_FOUND (also for another customer's order), BUDGET_EXCEEDED, NO_POLICY_FOUND.
     """
     ref = state.get("order_ref")
     if not ref:
@@ -143,14 +138,14 @@ def gather_facts(state: TicketState) -> dict[str, Any]:
     return {"order": order, "facts": facts, "errors": errors}
 
 
+# --- decide ---
 MAX_DECIDE_ATTEMPTS = 2  # the first answer, plus one retry after we tell the model what was wrong
 
 Action = Literal["refund", "reply", "escalate"]
 
 
 class Decision(BaseModel):
-    """What the model PROPOSES. A fixed schema, so it cannot answer in free text. It never decides money:
-    the policy engine (the rules node) does, and the engine wins."""
+    """What the model PROPOSES. It never decides money: the policy engine does, and the engine wins."""
 
     action: Action
     amount_pkr: int | None = Field(default=None, gt=0, le=100_000)
@@ -165,8 +160,8 @@ def _proposal(action: Action, summary: str) -> dict[str, Any]:
 
 
 def check_decision(decision: Decision, state: TicketState) -> str | None:
-    """Code checks what the model proposed. Returns a problem text for the model, or None when it is fine.
-    The text never repeats what the model wrote, so a hostile string cannot travel from one answer into the next."""
+    """Return a problem text for the model, or None when the proposal is fine.
+    The text never repeats what the model wrote, so a hostile string cannot travel into the next answer."""
     known = {fact["id"] for fact in state.get("facts", [])}
     if any(evidence_id not in known for evidence_id in decision.evidence_ids):
         return "evidence_ids may only contain ids that are listed in <facts>"
@@ -193,15 +188,9 @@ def _decide_input(state: TicketState) -> str:
 
 
 def decide(state: TicketState) -> dict[str, Any]:
-    """The model proposes one action (Decision). Code checks it with check_decision.
-
-    No model call when the facts decide it already:
-    - no order number, or the order is missing or not theirs -> reply (ask for the right order number)
-    - no order, or the read budget ran out                    -> escalate with the partial facts
-    - no policy found and the ticket is not a status question -> escalate, never invent a rule
-    - the retry budget is already used up                      -> escalate
-    A wrong or malformed answer is sent back to the model once. After that the ticket goes to a human.
-    """
+    """The model proposes one action. No model call when the facts already decide it:
+    missing or foreign order -> reply; facts incomplete or no policy -> escalate; retry budget used up -> escalate.
+    A wrong answer is sent back to the model once, then the ticket goes to a human."""
     errors = state.get("errors", [])
     intent = state.get("intent")
     if {"NO_ORDER_REF", "ORDER_NOT_FOUND"} & set(errors):
@@ -238,7 +227,8 @@ def decide(state: TicketState) -> dict[str, Any]:
     }
 
 
-# What `rules` stores when no money is involved (a reply or an escalation) or when the engine could not be asked.
+# --- rules ---
+# What `rules` stores when no money is involved, or when the engine could not be asked.
 NO_RULING: dict[str, Any] = {
     "tier": "none",
     "allowed_amount": 0,
@@ -249,16 +239,20 @@ NO_RULING: dict[str, Any] = {
 }
 
 
+def _refund_evidence(state: TicketState, reason: str) -> list[str]:
+    """Evidence for the engine. Only a damage claim needs it: the customer's own words count as the description."""
+    if reason != "damaged":
+        return []
+    description = last_customer_text(state).strip()[:300]
+    return [description] if description else []
+
+
 def rules(state: TicketState) -> dict[str, Any]:
-    """The policy engine decides, not the model (Table 12). Plain code, no model call.
+    """The policy engine decides, not the model. Only a refund proposal needs it.
 
-    Only a refund proposal needs the engine. It is asked through the propose_refund tool, which loads the order of
-    THIS customer itself, so the hidden facts (flagged customer, refund history, open refund) never go into the state.
-    The ruling is final: tier (auto, manager, owner, deny), the allowed amount, the reasons and the policy sections.
-    If the engine says less than the model proposed, or says no, the engine wins and the difference is written to
-    the log and to audit_log (event policy_override) for the evaluation analysis.
-
-    If the engine cannot be asked (budget, backend error), no money moves: the proposal becomes an escalation.
+    The ruling is final (tier, allowed amount, reasons, policy sections). If the engine says less than the model
+    proposed, or says no, the engine wins and the difference is written to audit_log (policy_override).
+    If the engine cannot be asked, no money moves: the proposal becomes an escalation.
     """
     proposal = state.get("proposal") or {}
     if proposal.get("action") != "refund":
@@ -304,27 +298,12 @@ def rules(state: TicketState) -> dict[str, Any]:
     return {"ruling": ruling}
 
 
-def _refund_evidence(state: TicketState, reason: str) -> list[str]:
-    """Evidence strings for the engine. Only a damage claim needs them: the customer's own words count as the
-    description. rules and execute use this same helper, so the engine sees the same facts both times."""
-    if reason != "damaged":
-        return []
-    description = last_customer_text(state).strip()[:300]
-    return [description] if description else []
-
-
+# --- approval_gate ---
 def approval_gate(state: TicketState) -> dict[str, Any]:
-    """Pause at a manager or owner tier refund and wait for a human (Step M). Plain code, no model call.
+    """Pause at a manager or owner refund and wait for a human (Step M). Plain code.
 
-    auto tier        -> nothing to wait for
-    manager or owner -> create the approval row, call interrupt(): the graph is saved by the checkpointer and the
-                        API call returns. Hours or days later the decision endpoint records the decision in the
-                        approvals table and resumes the graph with Command(resume=...).
-
-    On resume this node starts again from its first line, so everything before interrupt() must be safe to repeat:
-    request_approval is keyed (ticket, order, tier, amount) and returns the same row, and the audit row is written
-    only when the row was really created.
-
+    auto tier -> nothing to wait for. Manager or owner tier -> create the approval row and call interrupt().
+    On resume this node starts again from its first line, so everything before interrupt() must be safe to repeat.
     After interrupt() the answer comes from the approvals TABLE, never from the resume payload.
     """
     ruling = state.get("ruling") or {}
@@ -376,13 +355,12 @@ def approval_gate(state: TicketState) -> dict[str, Any]:
     }
 
 
+# --- execute ---
 def execute(state: TicketState) -> dict[str, Any]:
-    """Move the money, but only for an engine-approved refund that is auto or approved by a human. No model call.
+    """Move the money, only for a refund that is auto or approved by a human. No model call.
 
-    - the idempotency key is ticket:order:refund, so a replay after a crash or a resume never refunds twice
-    - the amount is the engine's allowed amount, or the lower amount the human approved
-    - issue_refund runs the policy engine and the approval check again as the last line of defence
-    - any error stops here: it goes to state["errors"] for verify and escalate, and nothing is retried blindly
+    The key ticket:order:refund makes a replay safe. issue_refund runs the policy engine and the approval check again.
+    Any error stops here and goes to state["errors"].
     """
     proposal = state.get("proposal") or {}
     ruling = state.get("ruling") or {}
@@ -428,21 +406,12 @@ def execute(state: TicketState) -> dict[str, Any]:
     }
 
 
-# ------------------------------------------------------------------------------------------------ verify
+# --- verify ---
 def verify(state: TicketState) -> dict[str, Any]:
-    """Check that the refund really shows on the order (Step L). Plain code, no model call.
+    """Read the order again and check that the refund really shows on it. Plain code.
 
-    execute said the refund was issued. verify does not trust that: it reads the order again from the shop and checks
-    that refunded_total grew by at least the refunded amount, and that the refund status is "issued".
-
-    - execute failed (errors in state)         -> verified False, the same errors, nothing else is tried
-    - nothing was executed and no error        -> verified False, errors ["NOT_EXECUTED"]
-    - the order cannot be read again           -> verified False, plus the error code of the shop
-    - the refund does not show on the order    -> verified False, plus ["REFUND_NOT_CONFIRMED"] and an audit row
-
-    There is no retry here on purpose. A second issue_refund cannot fix a missing refund (the idempotency key returns
-    the same result), and a failed attempt would use up the second write of the ticket, which reply needs for the email
-    (MAX_WRITES is 2). Any doubt about money goes to a human: after_verify sends it to escalate.
+    There is no retry on purpose: a second issue_refund cannot fix a missing refund, and any doubt about
+    money goes to a human (after_verify sends it to escalate).
     """
     errors = list(state.get("errors", []))
     result = state.get("result") or {}
@@ -470,17 +439,10 @@ def verify(state: TicketState) -> dict[str, Any]:
     return {"verified": True}
 
 
-# ---------------------------------------------------------------------------------------------- escalate
-def _one_line(text: Any, limit: int) -> str:
-    return " ".join(str(text).split())[:limit]
-
-
+# --- escalate ---
 def _escalation_summary(state: TicketState) -> str:
-    """One paragraph for the staff member, so nobody starts from zero. Built by code from the state.
-
-    The customer's own words are NOT copied in (staff read them in the ticket). The only model text is the one-line
-    note of the proposal, shortened and labelled.
-    """
+    """One paragraph for the staff member, built by code from the state.
+    The customer's own words are not copied in (staff read them in the ticket)."""
     order = state.get("order") or {}
     proposal = state.get("proposal") or {}
     ruling = state.get("ruling") or {}
@@ -512,11 +474,7 @@ def _escalation_summary(state: TicketState) -> str:
 
 
 def escalate(state: TicketState) -> dict[str, Any]:
-    """The safe exit (Step L). Plain code, no model call. Always allowed: any role, no call budget.
-
-    Marks the ticket as escalated and writes a one-paragraph summary to audit_log (event ticket_escalated).
-    reply runs after it and only tells the customer that a person will look at the request.
-    """
+    """The safe exit. Marks the ticket as escalated and writes a summary to audit_log. No model call."""
     result = escalate_to_human.invoke({"summary": _escalation_summary(state)})
     update: dict[str, Any] = {"escalated": True}
     if not result.get("ok"):
@@ -526,11 +484,11 @@ def escalate(state: TicketState) -> dict[str, Any]:
     return update
 
 
-# ------------------------------------------------------------------------------------------------- reply
+# --- reply ---
 MAX_DETAILS_CHARS = 500
 ESCALATED_DETAILS = "Thank you for your message. A member of our team will look at it and reply to you soon."
 GENERAL_FALLBACK = "Thank you for your message. Our team will review it and get back to you."
-# The model may write text for the customer, so code checks it: no address or link, and no sign that money moved.
+# Text written by the model must not contain an address or link, or a sign that money moved.
 UNSAFE_TEXT = re.compile(r"@|https?:|www\.", re.IGNORECASE)
 MONEY_DONE = re.compile(
     r"\b(refunded|credited|reimbursed|issued|processed|approved)\b"
@@ -559,7 +517,7 @@ class ReplyPlan:
 
 
 def _policy_ref(state: TicketState) -> str:
-    """The policy section to quote: the engine's refs first, then the policy facts. Never an address or a link."""
+    """The policy section to quote: the engine's refs first, then the policy facts."""
     refs = (state.get("ruling") or {}).get("policy_refs") or [
         f["data"]["section"] for f in state.get("facts", []) if f.get("source") == "search_policy"
     ]
@@ -586,7 +544,7 @@ def _reply_plan(state: TicketState) -> ReplyPlan:
     if state.get("escalated"):
         return ReplyPlan("general_reply", details=ESCALATED_DETAILS)
     if {"NO_ORDER_REF", "ORDER_NOT_FOUND"} & errors:
-        return ReplyPlan("need_verification")  # the same text for a missing and for a foreign order: nothing leaks
+        return ReplyPlan("need_verification")  # the same text for a missing and a foreign order: nothing leaks
     if state.get("verified") and result:
         return ReplyPlan(
             "refund_confirmed",
@@ -635,7 +593,7 @@ def _details_ok(text: str) -> bool:
 
 
 def _write_details(state: TicketState, plan: ReplyPlan) -> str:
-    """The model writes the details. If it fails or breaks a rule, the fixed fallback text is used instead."""
+    """The model writes the details. If it fails or breaks a rule, the fixed fallback text is used."""
     try:
         raw = (
             get_llm(temperature=0.3)
@@ -658,19 +616,10 @@ def _write_details(state: TicketState, plan: ReplyPlan) -> str:
 
 
 def reply(state: TicketState) -> dict[str, Any]:
-    """Write the customer email from a template plus details, and queue it (Step L). The last node of every path.
+    """Write the customer email from a template plus details and queue it. The last node of every path.
 
-    Code picks the template from what REALLY happened (_reply_plan), so the email can never promise an action that was
-    not executed:
-    - escalated                      -> general_reply, fixed text: a person will look at it (no model call)
-    - no or foreign order            -> need_verification (no model call)
-    - refund executed and verified   -> refund_confirmed, amount and reference from the result (no model call)
-    - manager rejected, engine deny  -> refund_denied with the policy section; the model only words the reason
-    - information only               -> status_update or general_reply; the model words the answer from the facts
-
-    The model text must pass _details_ok (no address, no link, no sign that money moved) or the fixed fallback is used.
-    The idempotency key is ticket:reply:template, so a replay sends the same email once. If the email cannot be queued
-    (role, email limit), the error goes to state and the run still ends: escalate is never entered a second time.
+    Code picks the template from what REALLY happened, so the email can never promise an action that was not done.
+    The key ticket:reply:template makes a replay send the same email once.
     """
     plan = _reply_plan(state)
     details = _write_details(state, plan) if plan.ask_model else plan.details
@@ -692,12 +641,12 @@ def reply(state: TicketState) -> dict[str, Any]:
     return {"outgoing": {"template": plan.template, "sent": True}}
 
 
-# ------------------------------------------------------------------------------------------------- edges
+# --- edges ---
 HANDLED_INTENTS = {"order_status", "refund", "exchange"}
 
 
 def after_triage(state: TicketState) -> Literal["gather_facts", "escalate"]:
-    """Only the three intents this agent handles read facts. Anything else (other, product_question) goes to a human."""
+    """Only the three handled intents read facts. Anything else goes to a human."""
     return "gather_facts" if state.get("intent") in HANDLED_INTENTS else "escalate"
 
 
@@ -707,7 +656,7 @@ def after_rules(state: TicketState) -> Literal["approval_gate", "reply", "escala
     if action == "reply":
         return "reply"
     if action != "refund":
-        return "escalate"  # escalate, or nothing usable
+        return "escalate"
     tier = (state.get("ruling") or {}).get("tier")
     if tier == "deny":
         return "reply"  # a polite denial, no human needed
@@ -717,8 +666,7 @@ def after_rules(state: TicketState) -> Literal["approval_gate", "reply", "escala
 
 
 def after_approval(state: TicketState) -> Literal["execute", "reply", "escalate"]:
-    """Only an auto tier or a recorded human approval reaches execute. A rejection is answered; anything else
-    (pending after a resume, expired, no row) goes to a person."""
+    """Only an auto tier or a recorded human approval reaches execute. A rejection is answered; the rest goes to a person."""
     status = (state.get("approval") or {}).get("status")
     if status in ("auto", "approved"):
         return "execute"
@@ -732,16 +680,8 @@ def after_verify(state: TicketState) -> Literal["reply", "escalate"]:
 
 
 def build_support_graph(checkpointer: Any = None) -> Any:
-    """Wire the nodes into the support graph of Figure 4 and compile it.
-
-    START -> triage -> (gather_facts | escalate)
-    gather_facts -> decide -> rules -> (approval_gate | reply | escalate)
-    approval_gate -> (execute | reply | escalate)        execute -> verify -> (reply | escalate)
-    escalate -> reply -> END
-
-    Pass a checkpointer (InMemorySaver in tests, the Postgres saver in the API) for interrupt() and resume to work.
-    Use thread_id = ticket id in the config.
-    """
+    """Wire the nodes into the graph and compile it. Use thread_id = ticket id in the config.
+    Pass a checkpointer (InMemorySaver in tests, the Postgres saver in the API) so interrupt() and resume work."""
     g = StateGraph(TicketState)
     for name, fn in [
         ("triage", triage),
