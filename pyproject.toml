@@ -58,6 +58,13 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 
+[tool.coverage.run]
+source = ["shoppilot"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
 [dependency-groups]
 dev = [
     "hypothesis>=6.168.3",
