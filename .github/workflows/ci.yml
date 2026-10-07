@@ -33,3 +33,12 @@ jobs:
           --cov-report=term-missing --cov-fail-under=80
       # Step N "done when": a run that waits for a human survives a process restart (needs the Postgres service).
       - run: uv run pytest tests/integration/test_checkpoint_resume.py -v
+      # Evaluation smoke test: 10 cases on the real model, fails on a wrong refund or an approval bypass.
+      # --local: no LangSmith upload, so no LangSmith key is needed. Secrets are not available on pull requests from forks.
+      - name: Evaluation smoke test
+        if: github.event_name == 'push'
+        env:
+          SHOP_LLM_PROVIDER: groq
+          SHOP_LLM_MODEL: openai/gpt-oss-120b
+          SHOP_LLM_API_KEY: ${{ secrets.SHOP_LLM_API_KEY }}
+        run: uv run python scripts/run_eval.py --subset smoke --local --gate
