@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     s3_bucket: str = ""
     owner_email: str = ""                # the daily report is queued for this address (fake address in dev)
 
+    # Store backend (Step E): "mock" = MockShop on Postgres, "shopify" = the Shopify development store
+    store_backend: str = "mock"
+    shopify_store_domain: str = ""        # my-store.myshopify.com
+    shopify_client_id: str = ""
+    shopify_client_secret: str = ""
+    shopify_api_version: str = "2026-07"
+
     langsmith_tracing: bool = False
     langsmith_project: str = "shoppilot-dev"
 

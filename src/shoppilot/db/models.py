@@ -168,3 +168,17 @@ class ReportRunRow(AppBase):
     s3_key: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     status: Mapped[str] = mapped_column(String, default="running")  # running | done | failed
+
+
+class PurchaseDraftRow(AppBase):
+    """Purchase order drafts of the Shopify backend. Shopify has no purchase order API, so this stays our own table.
+    No ForeignKey on sku: the product lives in Shopify, not in our database. (MockShop has its own table.)"""
+
+    __tablename__ = "purchase_drafts"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    sku: Mapped[str] = mapped_column(String, index=True)
+    qty: Mapped[int] = mapped_column(Integer)
+    supplier: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

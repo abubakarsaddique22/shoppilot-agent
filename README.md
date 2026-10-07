@@ -37,7 +37,7 @@ uv run uvicorn shoppilot.api.main:app --reload
 | B | Accounts, keys, budget safety | Partial (AWS ka hissa baad mein) |
 | C | Repo aur environment | Done |
 | D | Config, secrets, logging | Done |
-| E | Store backend + 200 fake orders (MockShop) | Done (Shopify baad mein) |
+| E | Store backend: MockShop + asli Shopify | Done (Shopify ke baqi test: neeche Shopify section dekho) |
 | F | Policy engine (refund rules) | Done |
 | G | Policy knowledge base (RAG, fastembed) | Done (22 tests pass, threshold data se chuna) |
 | H | Database tables + migrations | Done |
@@ -108,7 +108,7 @@ Baqi steps (K se Z): graph, approval, router, API, UI, evaluation, AWS deploy. D
 - `shop/base.py`: `ShopBackend` interface (`get_order`, `track_shipment`, `create_refund` ...) aur data models.
 - `shop/mock_models.py`, `shop/mockshop.py`: nakli dukaan (Shopify jaise table names).
 - `shop/seed.py`, `scripts/seed_mockshop.py`: 200 fake orders (late, damaged, COD, already refunded, injection attempt waghera), PKR amounts ke saath.
-- `shop/shopify.py`: khali. Asli Shopify baad mein.
+- `shop/shopify.py`: asli Shopify (`ShopifyBackend`). Details neeche "Shopify (asli store)" section mein.
 - `tests/unit/test_mockshop.py`: 25 tests.
 
 ```bat
@@ -264,6 +264,61 @@ uv run python scripts/eval_v0.py --repeats 3
 - Har run LangSmith project `shoppilot-dev` mein dikhta hai (har node, LLM call aur tool call).
 
 Step J ke apne alag unit tests nahi hain, kyunke ye asli model par chalne wali evaluation hai. `uv run pytest` sirf ye confirm karta hai ke baqi project nahi toota.
+
+---
+
+## Shopify (asli store)
+
+**Kya karta hai:** `ShopifyBackend` wohi `ShopBackend` interface deta hai jo MockShop deta hai, is liye agent ka code nahi badalta. Mock se Shopify ka switch sirf ek setting hai.
+
+**Setting (`.env`):**
+
+```
+SHOP_STORE_BACKEND=shopify          # mock (default) ya shopify
+SHOP_SHOPIFY_STORE_DOMAIN=xxxx.myshopify.com
+SHOP_SHOPIFY_CLIENT_ID=...
+SHOP_SHOPIFY_CLIENT_SECRET=...
+```
+
+Login client-credentials grant se hota hai. Token taqreeban 24 ghante chalta hai, cache hota hai aur expire se pehle renew hota hai. Store ki currency PKR honi chahiye.
+
+**Zaroori scopes (Dev Dashboard mein app version par):**
+`read_orders, write_orders, read_customers, write_customers, read_products, write_products, read_inventory, read_fulfillments, write_merchant_managed_fulfillment_orders, read_locations`
+
+Naye scopes ke baad app ka naya version release karna aur store par approve karna parta hai. `scripts/check_shopify.py` ki `Scopes:` line se confirm karo.
+
+**Customer data ki ijazat:** Order ki email, customer ka naam, phone aur address "protected customer data" hain. Inke baghair `customer_email` khali aata hai aur `find_orders` kuch nahi deta.
+1. App ko ek distribution method chahiye. Is project mein Partners dashboard > Distribution > Custom distribution (sirf apne store ka domain, Plus multi-store ka tick nahi).
+2. Partners dashboard > API access requests > Protected customer data access: "Protected customer data" chuno, wajah likho, aur Protected customer fields (name, email, phone, address) alag se chuno.
+
+**Metafields (variant par, namespace `shoppilot`):**
+
+| Key | Matlab |
+|---|---|
+| `reorder_point` | Is stock par ya is se kam ho to low stock. Na ho to 0, yani kabhi low stock nahi |
+| `avg_daily_sales` | Roz ki ausat bikri, `days_of_stock` ke liye |
+
+**Tags:** product par `non-refundable` tag ho to wo refundable nahi. Customer par `flagged` tag ho to flagged customer.
+
+**COD:** Payment method ka naam "Cash on Delivery (COD)" ho. Backend gateway ke naam mein "cash on delivery" ya "(cod)" dhoondta hai, warna order `prepaid` samjha jata hai.
+
+**Hifazati baatein:**
+- Refund mein `@idempotent` key aur note mein `[shoppilot:<key>]`: same key dobara bhejne par doosra refund nahi banta.
+- Cancel sirf aise order par chalta hai jo abhi "placed" ho. Refund aur customer email isme nahi hote.
+- Product draft hamesha status DRAFT mein banta hai, agent use publish nahi kar sakta.
+- Purchase order draft Shopify mein nahi, hamari `purchase_drafts` table mein banta hai (SKU asli store se check hota hai).
+- `read_orders` sirf pichhle 60 din ke orders deta hai. Purane orders ke liye `read_all_orders` alag se mangna parta hai, abhi zaroorat nahi.
+
+**Scripts:**
+
+```bat
+uv run python scripts/check_shopify.py             # token, scopes, shop, currency, counts
+uv run python scripts/inspect_shopify.py           # variants, customers, locations dekhne ke liye
+uv run python scripts/seed_shopify_products.py     # 13 ShopPilot products (SKU, PKR, stock, metafields)
+uv run python scripts/check_shopify_backend.py     # asli store par ShopifyBackend ki read checks
+```
+
+`tests/unit/test_shopify_backend.py` aur `tests/unit/test_shopify_writes.py` fake Shopify (`httpx.MockTransport`) par chalte hain, network ya secret nahi chahiye.
 
 ---
 

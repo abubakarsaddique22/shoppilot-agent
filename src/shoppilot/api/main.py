@@ -30,7 +30,7 @@ from shoppilot.core.errors import OrderNotFound, register_exception_handlers
 from shoppilot.core.logging import bind_context, get_logger, setup_logging
 from shoppilot.db.session import make_engine, make_session_factory
 from shoppilot.policy.limits import load_limits
-from shoppilot.shop.mockshop import MockShop
+from shoppilot.shop.factory import make_shop
 
 log = get_logger("shoppilot.api")
 
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     factory = make_session_factory(engine)
     app.state.engine = engine
     app.state.session_factory = factory
-    app.state.shop = MockShop(factory)  # Step E: swap for the Shopify backend here when it exists
+    app.state.shop = make_shop(factory)  # SHOP_STORE_BACKEND=mock (default) or shopify
     app.state.limits = load_limits()
 
     # Step N: the Postgres checkpointer and the supervisor graph live for the whole life of the process.

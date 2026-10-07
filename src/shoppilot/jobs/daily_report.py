@@ -27,7 +27,7 @@ from shoppilot.core.logging import get_logger
 from shoppilot.db.models import MessageRow, ReportRunRow, TicketRow, utcnow
 from shoppilot.db.session import make_engine, make_session_factory
 from shoppilot.shop.base import ShopBackend
-from shoppilot.shop.mockshop import MockShop
+from shoppilot.shop.factory import make_shop
 from shoppilot.tools.context import RunContext, audit, ctx_var
 
 log = get_logger(__name__)
@@ -113,7 +113,7 @@ def run_daily_report(
 ) -> dict[str, Any]:
     """Make today's report once. Returns {"status": "done" | "skipped", "location": ..., "outcome": ...}."""
     sf = sf or make_session_factory(make_engine())
-    shop = shop or MockShop(sf, now=now)
+    shop = shop or make_shop(sf, now=now)
     day = now().date().isoformat()
     thread_id = f"report-{day}"
     key = f"reports/daily-{day}.html"

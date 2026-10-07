@@ -22,7 +22,8 @@ from shoppilot.core.config import settings
 from shoppilot.core.logging import get_logger
 from shoppilot.db.models import ApprovalRow, TicketRow, utcnow
 from shoppilot.db.session import make_engine, make_session_factory
-from shoppilot.shop.mockshop import MockShop
+from shoppilot.shop.base import ShopBackend
+from shoppilot.shop.factory import make_shop
 from shoppilot.tools.context import RunContext, audit, ctx_var
 
 log = get_logger(__name__)
@@ -50,12 +51,12 @@ def ensure_ticket(sf: sessionmaker[Session], ticket_id: str, email: str) -> None
 # ------------------------------------------------------------------------------------------------ the job
 def run_low_stock(
     sf: sessionmaker[Session] | None = None,
-    shop: MockShop | None = None,
+    shop: ShopBackend | None = None,
     now: Callable[[], datetime] = utcnow,
 ) -> dict[str, Any]:
     """Check the stock once. Returns {"checked": n, "drafted": [sku], "skipped": [sku], "failed": {sku: reason}}."""
     sf = sf or make_session_factory(make_engine())
-    shop = shop or MockShop(sf, now=now)
+    shop = shop or make_shop(sf, now=now)
     day = now().date()
     ticket_id = f"low-stock-{day.isoformat()}"
     email = settings.owner_email or "system@example.com"
