@@ -4,7 +4,7 @@
 const API_BASE = "/api"; // Caddy "/api" hata kar request api:8000 ko bhejta hai
 const SESSION_KEY = "shoppilot_session";
 
-// ---------------------------------------------------------------- session
+// ------------------------------------------------ session
 export function getSession() {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
@@ -191,6 +191,6 @@ export async function streamRun(ticketId, onEvent, signal) {
   } catch (err) {
     if (err.name !== "AbortError") throw err;
   } finally {
-    reader.cancel().catch(() => {});
+    reader.cancel().catch(() => { });
   }
 }
