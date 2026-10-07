@@ -53,3 +53,10 @@ jobs:
       - name: Image must not contain secrets
         run: |
           if docker run --rm --entrypoint sh shoppilot-api:ci -c 'test -e /app/.env'; then echo ".env is inside the image"; exit 1; fi
+      # The production compose file is only validated here (nothing is started). A dummy env file stands in for the SSM one.
+      - name: Validate docker-compose.prod.yml
+        run: |
+          sudo touch /run/shoppilot.env
+          POSTGRES_PASSWORD=dummy docker compose -f docker-compose.prod.yml config -q
+          # the compose file must refuse to start without a database password
+          if docker compose -f docker-compose.prod.yml config -q 2>/dev/null; then echo "missing POSTGRES_PASSWORD was accepted"; exit 1; fi

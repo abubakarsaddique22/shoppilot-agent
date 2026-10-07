@@ -1,0 +1,56 @@
+# Production stack for the EC2 host (blueprint section 17.1): caddy + api + db. The local dev file is docker-compose.yml.
+#
+#   docker compose -f docker-compose.prod.yml --env-file /run/shoppilot.env up -d --build
+#
+# /run/shoppilot.env is written from SSM by infra/aws/fetch_secrets.sh and lives on tmpfs, never in Git or in an image.
+# Only caddy publishes ports (80 and 443). The API and Postgres are reachable only inside the Compose network
+# (Docker published ports can bypass the host firewall, so Postgres gets no "ports" at all).
+
+services:
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./ui:/srv/ui:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    restart: unless-stopped
+
+  api:
+    image: shoppilot-api:${GIT_SHA:-dev}   # tagged with the Git SHA, so a rollback is "deploy the previous tag"
+    build: { context: ., dockerfile: infra/docker/Dockerfile }
+    env_file: /run/shoppilot.env           # SHOP_LLM_API_KEY, SHOP_JWT_SECRET, SHOP_S3_BUCKET ... from SSM
+    environment:
+      SHOP_ENV: prod
+      SHOP_DATABASE_URL: postgresql+psycopg://shop:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set}@db:5432/shoppilot
+      SHOP_LLM_PROVIDER: ${SHOP_LLM_PROVIDER:-groq}
+      SHOP_LLM_MODEL: ${SHOP_LLM_MODEL:-openai/gpt-oss-120b}
+      # Prod traces go to their own LangSmith project, so they never mix with dev or evaluation traces.
+      LANGSMITH_TRACING: "true"
+      SHOP_LANGSMITH_TRACING: "true"
+      LANGSMITH_PROJECT: shoppilot-prod
+      SHOP_LANGSMITH_PROJECT: shoppilot-prod
+    expose: ["8000"]                       # internal only, not published
+    depends_on:
+      db: { condition: service_healthy }
+    restart: unless-stopped
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: shoppilot
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shoppilot"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped                # no ports: reachable only inside the Compose network
+
+volumes:
+  pgdata: {}
+  caddy_data: {}
+  caddy_config: {}
