@@ -34,6 +34,8 @@ from shoppilot.tools.refunds import Reason, issue_refund, propose_refund
 
 log = get_logger(__name__)
 
+GRAPH_VERSION = "support-v1"  # bump when a node or edge changes (goes into the LangSmith metadata)
+
 
 def last_customer_text(state: TicketState) -> str:
     for message in reversed(state.get("messages", [])):

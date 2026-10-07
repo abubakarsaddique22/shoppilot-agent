@@ -24,7 +24,9 @@ from typing import Any
 from dotenv import load_dotenv
 from langsmith import Client, evaluate
 
+from shoppilot.agents.support import GRAPH_VERSION
 from shoppilot.core.config import settings
+from shoppilot.core.prompts import prompt_versions
 from shoppilot.evaluation.dataset import (
     BASELINE_FILE,
     DATASET,
@@ -90,7 +92,8 @@ def rows_langsmith(cases: list[dict[str, Any]], evaluators: list[Any], args: arg
         evaluators=evaluators,
         experiment_prefix=label,
         metadata={"provider": settings.llm_provider, "model": settings.llm_model, "subset": args.subset,
-                  "kb": "real" if args.real_kb else "fixed", "cases": len(cases)},
+                  "kb": "real" if args.real_kb else "fixed", "cases": len(cases), "graph_version": GRAPH_VERSION,
+                  "prompt_versions": prompt_versions("triage", "decide", "reply")},
         num_repetitions=args.repeats,
         max_concurrency=1,  # one case at a time: the llm_down fault patches a global
     )  # fmt: skip

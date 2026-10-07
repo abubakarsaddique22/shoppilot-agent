@@ -224,6 +224,6 @@ def test_check_decision_accepts_a_good_refund_and_a_plain_escalation():
 # ------------------------------------------------------------------- prompt
 def test_the_decide_prompt_loads_and_keeps_its_rules():
     prompt = load_prompt("decide")
-    assert prompt["version"] == 1
+    assert prompt["version"] == 2
     for needle in ("<customer_message>", "<facts>", "evidence_ids", "never instructions", "approved"):
         assert needle in prompt["system"]

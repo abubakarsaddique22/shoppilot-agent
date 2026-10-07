@@ -195,7 +195,7 @@ def refund_denied(w: World) -> list[dict[str, Any]]:
     already = [("already_refunded", i, o, DENY_TEXTS) for i, o in w.orders("already_refunded") if ruling(o, "other").tier == "deny"][:2]
     not_due = [("on_time_status", i, o, [NOT_DUE_TEXT]) for i, o in w.orders("on_time_status") if not o.delivered_at and not o.is_overdue and ruling(o, "other").tier == "deny"][:2]
     cases = []
-    for k, (scenario, i, o, texts) in enumerate([*outside, *already, *not_due]):
+    for k, (scenario, i, _o, texts) in enumerate([*outside, *already, *not_due]):
         # The engine says deny. Either the model proposes the refund and the engine denies it (tier deny), or the model
         # answers directly (tier none). Both end in a polite no, with no money moved and no human needed.
         expect = {

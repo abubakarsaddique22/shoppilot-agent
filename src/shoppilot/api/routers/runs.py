@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 
 from shoppilot.agents.checkpoint import get_ticket_state
+from shoppilot.agents.support import GRAPH_VERSION
 from shoppilot.api.deps import (
     ClockDep,
     GraphDep,
@@ -51,6 +52,7 @@ from shoppilot.approvals.service import get_approval
 from shoppilot.core.config import settings
 from shoppilot.core.errors import DatabaseError, IdempotencyConflict, TicketNotFound, ValidationFailed
 from shoppilot.core.logging import bind_context, get_logger
+from shoppilot.core.prompts import prompt_versions
 from shoppilot.db.models import TicketRow
 from shoppilot.tools.context import RunContext, audit, ctx_var
 
@@ -162,7 +164,11 @@ def make_work(
 
                 config = {
                     "configurable": {"thread_id": ticket_id},  # thread_id = ticket id, so the checkpointer finds the run
-                    "metadata": {"ticket_id": ticket_id, "role": ctx.actor_role, "env": settings.env},
+                    "metadata": {
+                        "ticket_id": ticket_id, "role": ctx.actor_role, "env": settings.env,
+                        "model": f"{settings.llm_provider}/{settings.llm_model}", "graph_version": GRAPH_VERSION,
+                        "prompt_versions": prompt_versions("triage", "decide", "reply"),
+                    },
                     "tags": [settings.env],
                 }
                 for namespace, chunk in graph.stream(plan.graph_input, config, stream_mode="updates", subgraphs=True):

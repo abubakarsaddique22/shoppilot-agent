@@ -139,7 +139,14 @@ def run_daily_report(
     )  # fmt: skip
     token = ctx_var.set(ctx)
     try:
-        out = build_reports_graph().invoke({"ticket_id": thread_id})
+        config = {
+            "metadata": {
+                "ticket_id": thread_id, "role": "system", "env": settings.env,
+                "model": f"{settings.llm_provider}/{settings.llm_model}", "job": "daily_report",
+            },
+            "tags": [settings.env, "scheduled"],
+        }
+        out = build_reports_graph().invoke({"ticket_id": thread_id}, config)
         if out.get("errors"):
             raise RuntimeError(f"the Reports agent failed: {out['errors']}")
         page = render_html(out["numbers"], out["summary"], out["actions"])

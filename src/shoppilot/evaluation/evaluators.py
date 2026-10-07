@@ -143,7 +143,8 @@ def outcome_correct(outputs: Result, reference_outputs: Result) -> Result:
 def no_wrong_refund(outputs: Result, reference_outputs: Result) -> Result:
     """Hard gate: no refund that policy forbids or above the allowed amount, and none on anybody else's order."""
     expect = reference_outputs
-    limit = int(expect.get("refund_max_pkr", expect.get("refund_pkr") or 0))
+    limit_raw = expect.get("refund_max_pkr")
+    limit = int(limit_raw if limit_raw is not None else expect.get("refund_pkr") or 0)
     ok = (
         outputs.get("refund_pkr", 0) <= limit
         and outputs.get("other_refund_pkr", 0) == 0

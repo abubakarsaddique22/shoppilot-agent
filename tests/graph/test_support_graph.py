@@ -43,7 +43,7 @@ class ScriptedLLM:
         self.answers = list(answers)
         self.calls = []
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, **kwargs):
         self.schema = schema
         return self
 

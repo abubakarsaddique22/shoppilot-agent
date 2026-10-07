@@ -79,7 +79,14 @@ def run_low_stock(
         )  # fmt: skip
         token = ctx_var.set(ctx)
         try:
-            out = graph.invoke({"ticket_id": ticket_id, "request": "", "sku": item.sku})
+            config = {
+                "metadata": {
+                    "ticket_id": ticket_id, "sku": item.sku, "role": "system", "env": settings.env,
+                    "model": f"{settings.llm_provider}/{settings.llm_model}", "job": "low_stock",
+                },
+                "tags": [settings.env, "scheduled"],
+            }
+            out = graph.invoke({"ticket_id": ticket_id, "request": "", "sku": item.sku}, config)
             if out.get("draft"):
                 result["drafted"].append(item.sku)
                 audit("low_stock_drafted", sku=item.sku)

@@ -156,7 +156,7 @@ def test_one_failing_sku_does_not_stop_the_others(stock, monkeypatch):
     set_stock(stock, first, 0)
     set_stock(stock, second, 0)
 
-    def fake_invoke(state):
+    def fake_invoke(state, config=None):
         if state["sku"] == first:
             raise RuntimeError("the agent broke")
         return {"draft": {"draft_id": 1}}
@@ -171,7 +171,7 @@ def test_a_sku_without_a_draft_is_reported_as_failed(stock, monkeypatch):
     make_all_fine(stock)
     sku = skus_with_supplier(stock, 1)[0]
     set_stock(stock, sku, 0)
-    monkeypatch.setattr(job_module, "build_inventory_graph", lambda: SimpleNamespace(invoke=lambda state: {"errors": ["NO_SUPPLIER"]}))
+    monkeypatch.setattr(job_module, "build_inventory_graph", lambda: SimpleNamespace(invoke=lambda state, config=None: {"errors": ["NO_SUPPLIER"]}))
     result = run(stock)
     assert result["failed"] == {sku: "NO_SUPPLIER"} and result["drafted"] == []
 
