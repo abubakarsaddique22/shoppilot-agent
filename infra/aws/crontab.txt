@@ -1,0 +1,20 @@
+# Crontab of the "ubuntu" user on the EC2 host. Install it once:   crontab /opt/shoppilot/infra/aws/crontab.txt
+# Server time is Asia/Karachi (set by userdata.sh), so 08 means 08:00 in Pakistan.
+# Output goes to /home/ubuntu/shoppilot-cron.log. Check it with:   tail -n 50 ~/shoppilot-cron.log
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# After a reboot /run is empty (tmpfs): write the secrets file again. The containers restart by themselves.
+@reboot sleep 45 && bash /opt/shoppilot/infra/aws/fetch_secrets.sh >> /home/ubuntu/shoppilot-cron.log 2>&1
+
+# 02:15 nightly Postgres backup to S3
+15 2 * * * bash /opt/shoppilot/scripts/backup.sh >> /home/ubuntu/shoppilot-cron.log 2>&1
+
+# 08:00 daily report (one report per day, a second run does nothing)
+0 8 * * * cd /opt/shoppilot && docker compose -f docker-compose.prod.yml --env-file /run/shoppilot.env exec -T api python -m shoppilot.jobs.daily_report >> /home/ubuntu/shoppilot-cron.log 2>&1
+
+# every 4 hours: low-stock check (purchase order drafts only for SKUs below the reorder point)
+0 */4 * * * cd /opt/shoppilot && docker compose -f docker-compose.prod.yml --env-file /run/shoppilot.env exec -T api python -m shoppilot.jobs.low_stock >> /home/ubuntu/shoppilot-cron.log 2>&1
+
+# Sunday 03:30: delete LangGraph checkpoints older than 30 days
+30 3 * * 0 cd /opt/shoppilot && docker compose -f docker-compose.prod.yml --env-file /run/shoppilot.env exec -T api python scripts/prune_checkpoints.py >> /home/ubuntu/shoppilot-cron.log 2>&1

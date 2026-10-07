@@ -1,12 +1,85 @@
 name: deploy
 
-# Placeholder for Step Y (deploy to EC2 with a short-lived AWS role, no stored keys).
-# It only runs when started by hand from the Actions tab, so it never fails on a push.
+# Step Y: deploy to the EC2 host with a short-lived AWS role (GitHub OIDC). No AWS access key is stored in GitHub.
+#
+#   automatic : after the "ci" workflow finishes green on main
+#   by hand   : Actions tab > deploy > Run workflow. Give a tag or SHA to deploy it; that is also the rollback.
+#
+# Repository variables (Settings > Secrets and variables > Actions > Variables), created in Step X:
+#   AWS_ROLE_ARN, AWS_REGION, EC2_INSTANCE_ID
+# Until EC2_INSTANCE_ID exists the job is skipped, so a push never fails because AWS is not ready yet.
 on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git tag or commit SHA to deploy (empty = the commit you ran this on)"
+        required: false
+        default: ""
+
+# two deploys at the same time would fight over docker compose
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  id-token: write   # needed to ask AWS for the short-lived credentials
+  contents: read
 
 jobs:
-  placeholder:
+  deploy:
+    if: >-
+      vars.EC2_INSTANCE_ID != '' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
-      - run: echo "Deploy is not set up yet (Step Y)."
+      - name: Pick the version to deploy
+        id: ver
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          THIS_SHA: ${{ github.sha }}
+        run: |
+          ref="${INPUT_REF:-${RUN_SHA:-$THIS_SHA}}"
+          # the value is pasted into a shell command on the server, so allow only safe characters
+          if ! [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then echo "bad ref: $ref"; exit 1; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Deploying $ref"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run deploy.sh on the instance (SSM Run Command, no SSH, no open port)
+        env:
+          REF: ${{ steps.ver.outputs.ref }}
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          cmd="sudo -u ubuntu -H bash -c 'cd /opt/shoppilot && git fetch --tags --prune origin && git checkout --force --detach $REF && bash infra/aws/deploy.sh $REF'"
+          jq -n --arg c "$cmd" '{commands: [$c], executionTimeout: ["1800"]}' > params.json
+          cmd_id=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript --comment "deploy $REF" \
+            --parameters file://params.json --query Command.CommandId --output text)
+          echo "SSM command: $cmd_id"
+
+          status=Pending
+          for _ in $(seq 1 360); do
+            status=$(aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 5
+          done
+
+          echo "---- output ----"
+          aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text
+          echo "---- errors ----"
+          aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent --output text
+          echo "final status: $status"
+          [ "$status" = "Success" ]

@@ -1,0 +1,6 @@
+# Windows git can turn LF into CRLF. A shell script with CRLF fails on Linux ("bad interpreter", "\r: command not found").
+*.sh text eol=lf
+Caddyfile* text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf

@@ -50,6 +50,11 @@ jobs:
           done
           docker logs api
           exit 1
+      # Step Y files: a typo in a shell script or an IAM policy would only show up on the server, so check them here.
+      - name: Shell scripts and IAM policies parse
+        run: |
+          for f in infra/aws/*.sh scripts/*.sh; do bash -n "$f" && echo "ok $f"; done
+          for f in infra/aws/*.json; do python3 -m json.tool "$f" > /dev/null && echo "ok $f"; done
       - name: Image must not contain secrets
         run: |
           if docker run --rm --entrypoint sh shoppilot-api:ci -c 'test -e /app/.env'; then echo ".env is inside the image"; exit 1; fi
