@@ -5,6 +5,18 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # Same user, password and database as the default SHOP_DATABASE_URL in core/config.py.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: shop
+          POSTGRES_PASSWORD: shop
+          POSTGRES_DB: shoppilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U shop -d shoppilot"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -14,9 +26,10 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run mypy src
-      # Integration tests (Postgres, embedding model) are added in step W3.
       # Coverage gate: at least 80 percent on policy, tools and guardrails (blueprint step W).
       - run: >-
           uv run pytest tests/unit tests/graph tests/redteam tests/api
           --cov=shoppilot.policy --cov=shoppilot.tools --cov=shoppilot.guardrails
           --cov-report=term-missing --cov-fail-under=80
+      # Step N "done when": a run that waits for a human survives a process restart (needs the Postgres service).
+      - run: uv run pytest tests/integration/test_checkpoint_resume.py -v
