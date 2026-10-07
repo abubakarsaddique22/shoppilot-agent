@@ -1,0 +1,21 @@
+# Keep secrets and local junk out of the image (blueprint: no secrets in the image).
+.env
+.env.*
+!.env.example
+.git
+.github
+.venv
+.vscode
+.cache
+.hypothesis
+.mypy_cache
+.pytest_cache
+.ruff_cache
+**/__pycache__
+*.pyc
+*.egg-info
+logs
+reports
+data/eval/results
+tests
+docs

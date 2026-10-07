@@ -1,5 +1,7 @@
 # ShopPilot
 
+[![ci](https://github.com/abubakarsaddique22/shoppilot-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/abubakarsaddique22/shoppilot-agent/actions/workflows/ci.yml)
+
 E-commerce operations agent (LangGraph + LangSmith + FastAPI + AWS). Customer ki email se lekar manager ki approval ke baad refund tak ka kaam agent karta hai.
 
 Poora plan: `ShopPilot_Agentic_AI_Blueprint_A_to_Z.pdf`. Requirements aur targets: `docs/PRD.md`.

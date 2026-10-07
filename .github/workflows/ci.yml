@@ -33,3 +33,23 @@ jobs:
           --cov-report=term-missing --cov-fail-under=80
       # Step N "done when": a run that waits for a human survives a process restart (needs the Postgres service).
       - run: uv run pytest tests/integration/test_checkpoint_resume.py -v
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the API image
+        run: docker build -f infra/docker/Dockerfile -t shoppilot-api:ci .
+      # SHOP_ENV=test: no UI mount. No database is given, so the API starts without agent runs and /health must still answer.
+      - name: Start the image and check /health
+        run: |
+          docker run -d --name api -p 8000:8000 -e SHOP_ENV=test shoppilot-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health; then echo; exit 0; fi
+            sleep 2
+          done
+          docker logs api
+          exit 1
+      - name: Image must not contain secrets
+        run: |
+          if docker run --rm --entrypoint sh shoppilot-api:ci -c 'test -e /app/.env'; then echo ".env is inside the image"; exit 1; fi
