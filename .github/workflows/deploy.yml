@@ -1,0 +1,12 @@
+name: deploy
+
+# Placeholder for Step Y (deploy to EC2 with a short-lived AWS role, no stored keys).
+# It only runs when started by hand from the Actions tab, so it never fails on a push.
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deploy is not set up yet (Step Y)."
