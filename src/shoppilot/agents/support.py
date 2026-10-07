@@ -64,7 +64,7 @@ def triage(state: TicketState) -> dict[str, Any]:
     if flags:
         audit("suspicious_text", flags=flags)  # a signal for the audit log only: the real defence is the code after the model
     try:
-        raw = get_llm().with_structured_output(Triage).invoke(
+        raw = get_llm().with_structured_output(Triage, method="json_schema").invoke(
             [
                 SystemMessage(load_prompt("triage")["system"]),
                 HumanMessage(wrap_untrusted(text)),  # cleaned, and the customer cannot close the data tag

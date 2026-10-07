@@ -1,0 +1,20 @@
+{"id": "route-01", "source": "ui_command", "text": "Customer Ali says order #88601 is late, please handle his refund", "expect": {"route": "support"}}
+{"id": "route-02", "source": "ui_command", "text": "A customer emailed asking where order #88650 is", "expect": {"route": "support"}}
+{"id": "route-03", "source": "ui_command", "text": "Reply to the customer about the damaged parcel on order #88702", "expect": {"route": "support"}}
+{"id": "route-04", "source": "ui_command", "text": "Handle the exchange request for order #88730", "expect": {"route": "support"}}
+{"id": "route-05", "source": "ui_command", "text": "Check why the refund for order #88777 was denied", "expect": {"route": "support"}}
+{"id": "route-06", "source": "ui_command", "text": "Reorder EARBUDS-TWS-01 please", "expect": {"route": "inventory"}}
+{"id": "route-07", "source": "ui_command", "text": "Stock of SPEAKER-BT-02 is low, prepare a purchase order", "expect": {"route": "inventory"}}
+{"id": "route-08", "source": "ui_command", "text": "How many units of SHEET-DBL-GRY do we have? Draft a reorder if needed", "expect": {"route": "inventory"}}
+{"id": "route-09", "source": "ui_command", "text": "Create a purchase order for 50 CASE-PRM-01", "expect": {"route": "inventory"}}
+{"id": "route-10", "source": "ui_command", "text": "Check inventory for LAMP-LED-01 and reorder if it is low", "expect": {"route": "inventory"}}
+{"id": "route-11", "source": "ui_command", "text": "Write a product listing for a handmade leather wallet, brown, 8 card slots", "expect": {"route": "listing"}}
+{"id": "route-12", "source": "ui_command", "text": "Draft the title and description for our new yoga mat, purple, 6mm", "expect": {"route": "listing"}}
+{"id": "route-13", "source": "ui_command", "text": "Create a product page for a cotton kurta, black, sizes M to XL", "expect": {"route": "listing"}}
+{"id": "route-14", "source": "ui_command", "text": "Write bullet points and tags for the hand blender 400W", "expect": {"route": "listing"}}
+{"id": "route-15", "source": "ui_command", "text": "Make a listing for a ceramic dinner set, 24 pieces, white", "expect": {"route": "listing"}}
+{"id": "route-16", "source": "ui_command", "text": "Send me today's sales report", "expect": {"route": "reports"}}
+{"id": "route-17", "source": "ui_command", "text": "Give me yesterday's sales numbers and the late orders", "expect": {"route": "reports"}}
+{"id": "route-18", "source": "ui_command", "text": "Run the daily operations report now", "expect": {"route": "reports"}}
+{"id": "route-19", "source": "ui_command", "text": "How much did we refund this week? Summarise the sales", "expect": {"route": "reports"}}
+{"id": "route-20", "source": "ui_command", "text": "hmm what do you think about the weather today", "expect": {"route": "unclear"}}

@@ -1,4 +1,4 @@
-.PHONY: setup up down seed ingest run test lint eval logs logs-errors demo-logs
+.PHONY: setup up down seed ingest run test lint eval eval-recreate logs logs-errors demo-logs
 
 # Uses uv, so the same commands work on Windows, macOS and Linux.
 # Install uv once: https://docs.astral.sh/uv/   (Windows: winget install astral-sh.uv)
@@ -25,6 +25,9 @@ lint:
 	$(RUN) mypy src
 eval:
 	$(RUN) python scripts/run_eval.py
+eval-recreate:   ## cases dobara banao, LangSmith dataset naya upload karo AUR poora eval bhi chalao (~14 min)
+	$(RUN) python scripts/build_cases_v1.py
+	$(RUN) python scripts/run_eval.py --recreate-dataset
 
 # --- logs ---
 logs:            ## app.log (INFO+) dekho
