@@ -1,0 +1,52 @@
+name: eval
+
+# Evaluation smoke test on the real model (10 cases, about 46 model requests). It is kept out of ci.yml so that it does
+# not use up the free LLM quota on every push. It runs only when something that can change the agent's behaviour
+# changes, or when started by hand from the Actions tab.
+on:
+  push:
+    paths:
+      - "src/shoppilot/agents/**"
+      - "src/shoppilot/tools/**"
+      - "src/shoppilot/policy/**"
+      - "src/shoppilot/guardrails/**"
+      - "src/shoppilot/core/llm.py"
+      - "src/shoppilot/evaluation/**"
+      - "configs/prompts/**"
+      - "configs/settings.dev.yaml"
+      - "data/eval/cases_v1.jsonl"
+      - "scripts/run_eval.py"
+  workflow_dispatch:
+
+# A newer push cancels an older eval run that is still going, so no requests are wasted.
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: shop
+          POSTGRES_PASSWORD: shop
+          POSTGRES_DB: shoppilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U shop -d shoppilot"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # --local: no LangSmith upload, so no LangSmith key is needed.
+      - name: Evaluation smoke test
+        env:
+          SHOP_LLM_PROVIDER: groq
+          SHOP_LLM_MODEL: openai/gpt-oss-120b
+          SHOP_LLM_API_KEY: ${{ secrets.SHOP_LLM_API_KEY }}
+        run: uv run python scripts/run_eval.py --subset smoke --local --gate
