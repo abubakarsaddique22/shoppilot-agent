@@ -48,6 +48,8 @@ Or in GitHub: Actions > deploy > Run workflow > enter the SHA. Migrations must s
 
 ## 4. Secrets
 
+The source of truth is GitHub (repository secrets and variables, listed at the top of `.github/workflows/deploy.yml`). Every deploy copies them to SSM, so change a value in GitHub and run the deploy workflow again. Exception: `PG_PASSWORD` must not change after the first deploy (Postgres keeps the password of its first start).
+
 Parameters live under `/shoppilot/prod/` (see `infra/aws/fetch_secrets.sh` for the required ones: `POSTGRES_PASSWORD`, `JWT_SECRET`, `LLM_API_KEY`; also `LANGSMITH_API_KEY`, `S3_BUCKET`, `WEBHOOK_SECRET`, `OWNER_EMAIL`).
 
 - Values may not contain a space or any of `$ # " ' \`. Make random ones with hex: `openssl rand -hex 32`.

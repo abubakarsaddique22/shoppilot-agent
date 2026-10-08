@@ -52,7 +52,7 @@ function simulatorCard() {
     el("div", { class: "field" },
       el("label", { for: email.id }, "Customer email"),
       email,
-      el("span", { class: "hint" }, "Use the email of a seeded MockShop order, or the agent will not find the order.")),
+      el("span", { class: "hint" }, "Use the email of a real order in the store (mock or Shopify), or the agent will not find the order.")),
     el("div", { class: "field" }, el("label", { for: subject.id }, "Subject (optional)"), subject),
     el("div", { class: "field" }, el("label", { for: body.id }, "Message"), body),
     submit,

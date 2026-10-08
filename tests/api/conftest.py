@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from shoppilot.api.routers import ALL_ROUTERS
+from shoppilot.core.config import settings
 from shoppilot.core.errors import register_exception_handlers
 from shoppilot.core.security import create_token
 from shoppilot.db.models import AppBase
@@ -62,7 +63,8 @@ class FakeGraph:
 
 
 @pytest.fixture
-def api():
+def api(monkeypatch):
+    monkeypatch.setattr(settings, "store_backend", "mock")  # tests never use the real store, whatever .env says
     engine = make_engine("sqlite://")
     seed_database(engine, SEED_NOW)  # the 200 fake MockShop orders (the simulator picks from them)
     AppBase.metadata.create_all(engine)

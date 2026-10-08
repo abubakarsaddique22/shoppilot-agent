@@ -81,6 +81,9 @@ ORDER_FIELDS = """
 
 Q_ORDERS = "query($q: String!, $n: Int!) { orders(first: $n, query: $q, sortKey: CREATED_AT, reverse: true) { nodes {" + ORDER_FIELDS + "} } }"  # noqa: E501
 
+# The demo simulator only needs the name and the e-mail of the seeded test orders (tag shoppilot-test-<kind>).
+Q_TEST_ORDERS = "query($q: String!, $n: Int!) { orders(first: $n, query: $q, sortKey: CREATED_AT) { nodes { name email cancelledAt displayFinancialStatus } } }"  # noqa: E501
+
 Q_CUSTOMER_REFUNDS = """
 query($id: ID!) {
   customer(id: $id) {
@@ -372,6 +375,18 @@ class ShopifyBackend:
         cache: dict[str, int] = {}  # one refund-history query per customer, not one per order
         orders = [self._order(n, cache) for n in data["orders"]["nodes"]]
         return [o for o in orders if o.customer_email.lower() == email]  # exact match only
+
+    def find_test_orders(self, kind: str, limit: int = 10) -> list[tuple[str, str]]:
+        """(order name, customer email) of the seeded test orders of one kind, oldest first. Used only by the demo
+        simulator. Cancelled and (partly) refunded orders are skipped, because a demo needs a fresh order, and so are
+        orders whose e-mail is not visible."""
+        data = self._gql(Q_TEST_ORDERS, {"q": f"tag:{_quoted('shoppilot-test-' + kind)}", "n": limit})
+        used_up = ("REFUNDED", "PARTIALLY_REFUNDED")
+        return [
+            (n["name"], n["email"])
+            for n in data["orders"]["nodes"]
+            if n.get("email") and not n.get("cancelledAt") and n.get("displayFinancialStatus") not in used_up
+        ]
 
     def get_customer(self, ref: str) -> Customer:
         ref = ref.strip()

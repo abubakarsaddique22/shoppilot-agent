@@ -10,6 +10,7 @@ The four orders cover what the order checks and the real refund/cancel tests nee
   placed      paid, not shipped          -> the real cancel test (do NOT use it for the refund test)
   late_auto   paid, not shipped, placed 12 days ago -> a late order whose refund is in the AUTO tier (2400 PKR)
   late_manager paid, not shipped, placed 12 days ago -> a late order whose refund needs a MANAGER (4800 PKR)
+  delivered   paid, shipped and marked DELIVERED, placed 3 days ago -> the "Damaged item" button of the simulator
 
 The two late orders are for the full support ticket (item 8): a new order is never "late" yet, so their date is moved
 back with processedAt. A refund needs an order that is delivered or more than 5 days late.
@@ -32,7 +33,7 @@ from shoppilot.shop.shopify import ShopifyBackend
 
 TAG = "shoppilot-test"
 COD_GATEWAY = "Cash on Delivery (COD)"
-TRACKING_NO = "TRK-TEST-001"
+TRACKING_NOS = {"fulfilled": "TRK-TEST-001", "delivered": "TRK-TEST-002"}  # kinds that get shipped
 COURIER = "TCS"
 
 # Small prices on purpose: the real refund test should move only a little money.
@@ -41,6 +42,23 @@ PLAN: list[dict[str, Any]] = [
     {"kind": "cod", "customer": "russel.winfield@example.com", "items": [("WALLET-LTH-BRN", 1)], "payment": "cod"},
     {"kind": "fulfilled", "customer": "ayumu.hirano@example.com", "items": [("LAMP-LED-01", 1)], "payment": "paid"},
     {"kind": "placed", "customer": "karine.ruby@example.com", "items": [("YOGA-MAT-PRP", 1)], "payment": "paid"},
+    # more late orders for the simulator: a refunded order is used up, so there must be fresh ones
+    {
+        "kind": "late_auto_2", "customer": "ayumu.hirano@example.com", "items": [("KURTA-M-BLK", 1)],
+        "payment": "paid", "days_ago": 12,
+    },
+    {
+        "kind": "late_auto_3", "customer": "karine.ruby@example.com", "items": [("KURTA-M-BLK", 1)],
+        "payment": "paid", "days_ago": 10,
+    },
+    {
+        "kind": "late_manager_2", "customer": "russel.winfield@example.com", "items": [("BLENDER-HAND-01", 1)],
+        "payment": "paid", "days_ago": 12,
+    },
+    {
+        "kind": "delivered", "customer": "karine.ruby@example.com", "items": [("CASE-PRM-01", 1)],
+        "payment": "paid", "days_ago": 3,
+    },
     {
         "kind": "late_auto", "customer": "ayumu.hirano@example.com", "items": [("KURTA-M-BLK", 1)],
         "payment": "paid", "days_ago": 12,
@@ -66,6 +84,17 @@ M_FULFILL = """
 mutation($f: FulfillmentInput!) {
   fulfillmentCreate(fulfillment: $f) {
     fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+
+
+# Marks a shipped order as delivered (the "Damaged item" simulator needs a delivered order).
+M_DELIVERED = """
+mutation($e: FulfillmentEventInput!) {
+  fulfillmentEventCreate(fulfillmentEvent: $e) {
+    fulfillmentEvent { id status }
     userErrors { field message }
   }
 }
@@ -164,7 +193,7 @@ def main() -> int:
                 print(f"\nSTOP at {plan['kind']}: {result['userErrors'][:3]}")
                 return 1
             order = result["order"]
-            if plan["kind"] == "fulfilled":
+            if plan["kind"] in TRACKING_NOS:
                 fulfillment_orders = [f["id"] for f in order["fulfillmentOrders"]["nodes"] if f["status"] == "OPEN"]
                 if not fulfillment_orders:
                     print(f"\nSTOP: {order['name']} has no open fulfillment order, so it cannot be fulfilled")
@@ -174,7 +203,7 @@ def main() -> int:
                     {
                         "f": {
                             "notifyCustomer": False,
-                            "trackingInfo": {"number": TRACKING_NO, "company": COURIER},
+                            "trackingInfo": {"number": TRACKING_NOS[plan["kind"]], "company": COURIER},
                             "lineItemsByFulfillmentOrder": [{"fulfillmentOrderId": fid} for fid in fulfillment_orders],
                         }
                     },
@@ -182,10 +211,21 @@ def main() -> int:
                 if fulfilled.get("userErrors"):
                     print(f"\nSTOP: {order['name']} was created but not fulfilled: {fulfilled['userErrors'][:3]}")
                     return 1
+            if plan["kind"] == "delivered":
+                try:
+                    done = backend._gql(
+                        M_DELIVERED,
+                        {"e": {"fulfillmentId": fulfilled["fulfillment"]["id"], "status": "DELIVERED"}},
+                    )["fulfillmentEventCreate"]
+                    problems = done.get("userErrors")
+                except AppError as err:  # for example the app has no write_fulfillments scope
+                    problems = [err.details or err.message]
+                if problems:  # the order exists and is shipped, only the DELIVERED mark is missing
+                    print(f"WARNING: {order['name']} could not be marked delivered: {problems[:3]}")
             created.append((order["name"], plan["kind"]))
             print(f"created {order['name']} ({plan['kind']})")
 
-        print("\nDone. Tracking number of the fulfilled order:", TRACKING_NO)
+        print("\nDone. Tracking numbers:", ", ".join(f"{k}={v}" for k, v in TRACKING_NOS.items()))
         for name, kind in created:
             print(f"  {name}  {kind}")
         print("Check with: uv run python scripts/check_shopify.py")

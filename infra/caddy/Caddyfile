@@ -1,4 +1,6 @@
-:80 {   # domain ho to ":80" ki jagah shop.example.com likho
+# SITE_ADDRESS comes from docker-compose.prod.yml: the DOMAIN setting (for example 13-233-1-2.sslip.io) gives automatic HTTPS,
+# no DOMAIN means plain HTTP on port 80.
+{$SITE_ADDRESS} {
     encode gzip
     header {
         X-Content-Type-Options nosniff

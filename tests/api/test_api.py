@@ -278,6 +278,34 @@ def test_simulator_takes_the_next_order_each_time_and_rejects_unknown_presets(ap
     assert api.client.post("/v1/simulator", json={"preset": "late_order"}, headers=api.auth("viewer")).status_code == 403
 
 
+class FakeShopifyShop:
+    """Only what the simulator asks the Shopify backend for: seeded test orders by kind."""
+
+    def __init__(self, orders: dict[str, list[tuple[str, str]]]) -> None:
+        self.orders = orders
+
+    def find_test_orders(self, kind: str, limit: int = 10) -> list[tuple[str, str]]:
+        return self.orders.get(kind, [])
+
+
+def test_simulator_uses_shopify_test_orders_when_the_store_is_shopify(api, monkeypatch):
+    monkeypatch.setattr(settings, "store_backend", "shopify")
+    api.app.state.shop = FakeShopifyShop({"late_auto": [("#1005", "Ayumu.Hirano@example.com")]})
+    res = api.client.post("/v1/simulator", json={"preset": "late_order"}, headers=api.auth("support"))
+    assert res.status_code == 201, res.text
+    detail = api.client.get(f"/v1/tickets/{res.json()['ticket_id']}", headers=api.auth("viewer")).json()
+    assert detail["ticket"]["customer_email"] == "ayumu.hirano@example.com"
+    assert "#1005" in detail["messages"][0]["body"]
+    assert "#886" not in detail["messages"][0]["body"]  # never a MockShop order
+
+
+def test_simulator_says_so_when_shopify_has_no_test_orders(api, monkeypatch):
+    monkeypatch.setattr(settings, "store_backend", "shopify")
+    api.app.state.shop = FakeShopifyShop({})
+    res = api.client.post("/v1/simulator", json={"preset": "damaged_item"}, headers=api.auth("support"))
+    assert res.status_code == 404 and res.json()["error"]["code"] == "NOT_SEEDED"
+
+
 # ------------------------------------------------------------------ webhook
 MAIL = {"from_email": "Ali@Example.com", "subject": "Late order", "body": "Where is my order #88601?"}
 

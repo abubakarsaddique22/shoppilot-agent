@@ -2,23 +2,27 @@
 
     POST /v1/simulator   {"preset": "late_order" | "damaged_item" | "injection_attempt"}   support and above
 
-The server picks a seeded MockShop order of the matching scenario and writes the customer's email from it, so the
-ticket belongs to a real (fake) customer and the agent finds the order. The browser sends only the preset name: it
-cannot choose the text, the email or the order. The ticket then runs like any other (POST /v1/tickets/{id}/run).
+The server picks a test order that matches the scenario and writes the customer's email from it, so the ticket belongs
+to a real (test) customer and the agent finds the order. The browser sends only the preset name: it cannot choose the
+text, the email or the order. The ticket then runs like any other (POST /v1/tickets/{id}/run).
 
-Each call takes the NEXT order of that scenario, so a demo can be repeated. To start again from a clean store, run
-`uv run python scripts/seed_mockshop.py`. This endpoint needs MockShop data; with the Shopify backend it would need a
-different source of test orders.
+Where the test orders come from depends on SHOP_STORE_BACKEND:
+- mock     the seeded MockShop orders (scenario column). To start again: `uv run python scripts/seed_mockshop.py`.
+- shopify  the test orders tagged "shoppilot-test-<kind>" in the development store (made by
+           `uv run python scripts/seed_shopify_orders.py --apply`).
+
+Each call takes the NEXT order of that scenario, so a demo can be repeated.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter
 from sqlalchemy import func, select
 
-from shoppilot.api.deps import SessionFactoryDep, SupportUser, write_audit
+from shoppilot.api.deps import SessionFactoryDep, ShopDep, SupportUser, write_audit
 from shoppilot.api.schemas import SimulatorIn, TicketCreated
 from shoppilot.api.services import create_ticket, created_response
-from shoppilot.core.errors import NotFound
+from shoppilot.core.config import settings
+from shoppilot.core.errors import ConfigError, NotFound
 from shoppilot.db.models import TicketRow
 from shoppilot.shop.mock_models import OrderRow
 
@@ -38,17 +42,49 @@ PRESETS: dict[str, tuple[str, str]] = {
     ),
 }
 
+# Shopify backend: preset -> kinds of seeded test orders (see scripts/seed_shopify_orders.py), tried in this order.
+SHOPIFY_KINDS: dict[str, list[str]] = {
+    "late_order": ["late_auto", "late_auto_2", "late_auto_3", "late_manager", "late_manager_2"],
+    "damaged_item": ["delivered"],  # a damaged item can only be refunded after delivery
+    "injection_attempt": ["fulfilled", "cod", "prepaid"],  # the agent must refuse, so any real order works
+}
 
-@router.post("", status_code=201)
-def simulate(body: SimulatorIn, user: SupportUser, factory: SessionFactoryDep) -> TicketCreated:
-    scenario, text = PRESETS[body.preset]
-    subject = f"[demo] {body.preset}"
+
+def mock_orders(factory, scenario: str) -> list[tuple[str, str]]:
     with factory() as session:
-        orders = session.execute(
+        rows = session.execute(
             select(OrderRow.name, OrderRow.email).where(OrderRow.scenario == scenario).order_by(OrderRow.id)
         ).all()
-        if not orders:
-            raise NotFound("no seeded orders found: run scripts/seed_mockshop.py first", code="NOT_SEEDED")
+    if not rows:
+        raise NotFound("no seeded orders found: run scripts/seed_mockshop.py first", code="NOT_SEEDED")
+    return [(name, email) for name, email in rows]
+
+
+def shopify_orders(shop, preset: str) -> list[tuple[str, str]]:
+    finder = getattr(shop, "find_test_orders", None)
+    if finder is None:
+        raise ConfigError("SHOP_STORE_BACKEND is 'shopify' but the shop backend cannot list test orders")
+    orders: list[tuple[str, str]] = []
+    for kind in SHOPIFY_KINDS[preset]:
+        orders.extend(finder(kind))
+    if not orders:
+        raise NotFound(
+            "no Shopify test orders found for this preset: run scripts/seed_shopify_orders.py --apply", code="NOT_SEEDED"
+        )
+    return orders
+
+
+@router.post("", status_code=201)
+def simulate(body: SimulatorIn, user: SupportUser, factory: SessionFactoryDep, shop: ShopDep) -> TicketCreated:
+    scenario, text = PRESETS[body.preset]
+    subject = f"[demo] {body.preset}"
+
+    if settings.store_backend.strip().lower() == "shopify":
+        orders = shopify_orders(shop, body.preset)
+    else:
+        orders = mock_orders(factory, scenario)
+
+    with factory() as session:
         used = session.scalar(
             select(func.count()).select_from(TicketRow).where(TicketRow.channel == "simulator", TicketRow.subject == subject)
         )

@@ -1,12 +1,22 @@
 name: deploy
 
-# Step Y: deploy to the EC2 host with a short-lived AWS role (GitHub OIDC). No AWS access key is stored in GitHub.
+# Step Y: deploy to the EC2 host through SSM Run Command (no SSH, no open port 22).
 #
 #   automatic : after the "ci" workflow finishes green on main
 #   by hand   : Actions tab > deploy > Run workflow. Give a tag or SHA to deploy it; that is also the rollback.
 #
-# Repository variables (Settings > Secrets and variables > Actions > Variables), created in Step X:
-#   AWS_ROLE_ARN, AWS_REGION, EC2_INSTANCE_ID
+# GitHub is the one place where the settings live. Every run copies them to AWS SSM Parameter Store
+# (/shoppilot/prod/NAME) and the server reads them from there (infra/aws/fetch_secrets.sh).
+#
+# Repository secrets   (Settings > Secrets and variables > Actions > Secrets)
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY    access key of the IAM user "shoppilot-ci" (policy: infra/aws/iam-ci-policy.json)
+#   PG_PASSWORD, SHOP_JWT_SECRET, SHOP_LLM_API_KEY      required (random hex for the first two, Groq key for the third)
+#   LANGSMITH_API_KEY, SHOP_SHOPIFY_CLIENT_ID, SHOP_SHOPIFY_CLIENT_SECRET, SHOP_WEBHOOK_SECRET      optional
+# Repository variables (same page, Variables tab)
+#   AWS_REGION, EC2_INSTANCE_ID, S3_BACKUP_BUCKET, DOMAIN, SHOP_SHOPIFY_STORE_DOMAIN, SHOP_OWNER_EMAIL
+#
+# ECR_REPOSITORY is not used: the image is built on the server (deploy.sh), so no ECR is needed.
+# PG_PASSWORD: Postgres reads it only when its data volume is created. Choose it once and do not change it later.
 # Until EC2_INSTANCE_ID exists the job is skipped, so a push never fails because AWS is not ready yet.
 on:
   workflow_run:
@@ -26,7 +36,6 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  id-token: write   # needed to ask AWS for the short-lived credentials
   contents: read
 
 jobs:
@@ -52,8 +61,61 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Copy the settings from GitHub to SSM Parameter Store
+        env:
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+          SHOP_JWT_SECRET: ${{ secrets.SHOP_JWT_SECRET }}
+          SHOP_LLM_API_KEY: ${{ secrets.SHOP_LLM_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          SHOP_SHOPIFY_CLIENT_ID: ${{ secrets.SHOP_SHOPIFY_CLIENT_ID }}
+          SHOP_SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOP_SHOPIFY_CLIENT_SECRET }}
+          SHOP_WEBHOOK_SECRET: ${{ secrets.SHOP_WEBHOOK_SECRET }}
+          SHOP_SHOPIFY_STORE_DOMAIN: ${{ vars.SHOP_SHOPIFY_STORE_DOMAIN }}
+          SHOP_OWNER_EMAIL: ${{ vars.SHOP_OWNER_EMAIL }}
+          S3_BACKUP_BUCKET: ${{ vars.S3_BACKUP_BUCKET }}
+          DOMAIN: ${{ vars.DOMAIN }}
+        run: |
+          # put NAME VALUE TYPE : write /shoppilot/prod/NAME. An empty value is skipped.
+          # fetch_secrets.sh refuses values with a space or one of $ # " ' \ so refuse them here too, before the server does.
+          put() {
+            local name="$1" value="$2" type="$3"
+            if [ -z "$value" ]; then echo "skip   $name (empty)"; return 0; fi
+            case "$value" in
+              *[[:space:]]* | *'$'* | *'#'* | *'"'* | *"'"* | *'\'*)
+                echo "ERROR: $name has a space, dollar, hash, quote or backslash in it. Use a value without them."
+                return 1
+                ;;
+            esac
+            aws ssm put-parameter --name "/shoppilot/prod/$name" --value="$value" --type "$type" --overwrite > /dev/null
+            echo "saved  $name"
+          }
+
+          for n in PG_PASSWORD SHOP_JWT_SECRET SHOP_LLM_API_KEY; do
+            if [ -z "${!n}" ]; then echo "ERROR: the GitHub secret $n is missing or empty"; exit 1; fi
+          done
+          if [ -n "$SHOP_SHOPIFY_STORE_DOMAIN" ]; then
+            for n in SHOP_SHOPIFY_CLIENT_ID SHOP_SHOPIFY_CLIENT_SECRET; do
+              if [ -z "${!n}" ]; then echo "ERROR: SHOP_SHOPIFY_STORE_DOMAIN is set, so the GitHub secret $n is needed"; exit 1; fi
+            done
+          fi
+
+          put POSTGRES_PASSWORD "$PG_PASSWORD" SecureString
+          put JWT_SECRET "$SHOP_JWT_SECRET" SecureString
+          put LLM_API_KEY "$SHOP_LLM_API_KEY" SecureString
+          put LANGSMITH_API_KEY "$LANGSMITH_API_KEY" SecureString
+          put SHOPIFY_CLIENT_ID "$SHOP_SHOPIFY_CLIENT_ID" SecureString
+          put SHOPIFY_CLIENT_SECRET "$SHOP_SHOPIFY_CLIENT_SECRET" SecureString
+          put WEBHOOK_SECRET "$SHOP_WEBHOOK_SECRET" SecureString
+          put SHOPIFY_STORE_DOMAIN "$SHOP_SHOPIFY_STORE_DOMAIN" String
+          put OWNER_EMAIL "$SHOP_OWNER_EMAIL" String
+          put S3_BUCKET "$S3_BACKUP_BUCKET" String
+          put DOMAIN "$DOMAIN" String
+          # a Shopify store domain means the real store; without it the app keeps using MockShop
+          if [ -n "$SHOP_SHOPIFY_STORE_DOMAIN" ]; then put STORE_BACKEND shopify String; else put STORE_BACKEND mock String; fi
 
       - name: Run deploy.sh on the instance (SSM Run Command, no SSH, no open port)
         env:

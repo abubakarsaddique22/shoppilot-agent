@@ -16,6 +16,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on: [api]
+    environment:
+      SITE_ADDRESS: ${DOMAIN:-:80}          # DOMAIN from SSM = automatic HTTPS; empty = plain HTTP
     restart: unless-stopped
 
   api:

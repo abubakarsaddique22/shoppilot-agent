@@ -15,6 +15,12 @@
       "Effect": "Allow",
       "Action": ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations"],
       "Resource": "*"
+    },
+    {
+      "Sid": "WriteDeploySettings",
+      "Effect": "Allow",
+      "Action": "ssm:PutParameter",
+      "Resource": "arn:aws:ssm:ap-south-1:ACCOUNT_ID:parameter/shoppilot/prod/*"
     }
   ]
 }
